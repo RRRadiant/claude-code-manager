@@ -1,0 +1,59 @@
+[package]
+name = "claude-code-manager"
+version = "0.1.0"
+description = "Claude Code Manager - Windows GUI for Claude Code"
+authors = ["Claude Code Manager Contributors"]
+license = "MIT"
+repository = "https://github.com/claude-code-manager/claude-code-manager"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+# Tauri
+tauri = { version = "2.11.3", features = ["tray-icon"] }
+tauri-plugin-log = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-shell = "2"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+regex = "1"
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID for task IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Windows-specific
+[target.'cfg(windows)'.dependencies]
+keyring = "3"
+winreg = "0.52"
+
+# File watching for config changes
+notify = "7"
+
+# HTTP client (for API testing, model detection)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+# Async trait support
+async-trait = "0.1"

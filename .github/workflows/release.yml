@@ -1,0 +1,225 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: '20'
+  APP_NAME: 'ClaudeCodeManager'
+
+jobs:
+  build-x64:
+    name: Build x64 (${{ matrix.bundle }})
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        bundle: [portable, setup]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build
+        run: |
+          if ("${{ matrix.bundle }}" -eq "portable") {
+            npx tauri build --target x86_64-pc-windows-msvc --bundles nsis
+          } else {
+            npx tauri build --target x86_64-pc-windows-msvc --bundles msi,nsis
+          }
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Rename portable
+        if: matrix.bundle == 'portable'
+        shell: pwsh
+        run: |
+          Move-Item src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe "${{ env.APP_NAME }}-x64-portable.exe" -Force
+
+      - name: Rename setup
+        if: matrix.bundle == 'setup'
+        shell: pwsh
+        run: |
+          Get-ChildItem src-tauri/target/x86_64-pc-windows-msvc/release/bundle/ -Recurse -Filter *.exe,*.msi | ForEach-Object {
+            $newName = $_.Name -replace '.*\.exe$', "${{ env.APP_NAME }}-x64-setup.exe"
+            Copy-Item $_.FullName "${{ env.APP_NAME }}-x64-setup.exe"
+          }
+
+      - name: Generate SHA-256
+        shell: pwsh
+        run: |
+          Get-ChildItem *.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)" | Out-File -Append "${{ env.APP_NAME }}-x64-SHA256.txt"
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-x64-${{ matrix.bundle }}
+          path: |
+            *.exe
+            *.txt
+          if-no-files-found: error
+
+  build-arm64:
+    name: Build ARM64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install ARM64 build tools
+        shell: pwsh
+        run: |
+          # Note: Requires Visual Studio with ARM64 build tools pre-installed on runner
+          Write-Output "Building for ARM64..."
+
+      - name: Build
+        run: npx tauri build --target aarch64-pc-windows-msvc --bundles nsis
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Rename artifacts
+        shell: pwsh
+        run: |
+          Move-Item src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.exe "${{ env.APP_NAME }}-arm64-portable.exe" -Force
+          $hash = (Get-FileHash "${{ env.APP_NAME }}-arm64-portable.exe" -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ env.APP_NAME }}-arm64-portable.exe" | Out-File "${{ env.APP_NAME }}-arm64-SHA256.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-arm64
+          path: |
+            *.exe
+            *.txt
+          if-no-files-found: error
+
+  generate-release:
+    name: Generate Release
+    needs: [build-x64, build-arm64]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-assets
+          Get-ChildItem artifacts -Recurse -Filter *.exe | ForEach-Object {
+            Copy-Item $_.FullName "release-assets/"
+          }
+          Get-ChildItem artifacts -Recurse -Filter *.txt | ForEach-Object {
+            Copy-Item $_.FullName "release-assets/"
+          }
+
+      - name: Generate update manifest
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $x64Setup = Get-ChildItem release-assets/*x64-setup* | Select-Object -First 1
+          $x64Portable = Get-ChildItem release-assets/*x64-portable* | Select-Object -First 1
+          $arm64Portable = Get-ChildItem release-assets/*arm64-portable* | Select-Object -First 1
+
+          $manifest = @{
+            version = $version
+            notes = "请查看 Release Notes 获取详细变更。"
+            pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{}
+          }
+
+          if ($x64Setup) {
+            $hash = (Get-FileHash "release-assets/$($x64Setup.Name)" -Algorithm SHA256).Hash.ToLower()
+            $manifest.platforms['windows-x86_64'] = @{
+              signature = "<signature-from-build>"
+              url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($x64Setup.Name)"
+              sha256 = $hash
+            }
+          }
+
+          if ($arm64Portable) {
+            $hash = (Get-FileHash "release-assets/$($arm64Portable.Name)" -Algorithm SHA256).Hash.ToLower()
+            $manifest.platforms['windows-aarch64'] = @{
+              signature = "<signature-from-build>"
+              url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($arm64Portable.Name)"
+              sha256 = $hash
+            }
+          }
+
+          $manifest | ConvertTo-Json -Depth 10 | Out-File "release-assets/update-manifest.json" -Encoding UTF8
+
+      - name: Generate SBOM
+        shell: pwsh
+        run: |
+          # Generate a simple SBOM for the release
+          $sbom = @{
+            bomFormat = "CycloneDX"
+            specVersion = "1.5"
+            version = 1
+            metadata = @{
+              timestamp = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+              component = @{
+                name = "ClaudeCodeManager"
+                version = "${{ github.ref_name }}"
+                type = "application"
+              }
+            }
+          }
+          $sbom | ConvertTo-Json -Depth 10 | Out-File "release-assets/sbom.json" -Encoding UTF8
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Claude Code Manager ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          draft: true
+          prerelease: false
+          files: release-assets/*
+          fail_on_unmatched_files: true

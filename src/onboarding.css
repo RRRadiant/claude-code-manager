@@ -1,0 +1,19 @@
+/* ===== Onboarding ===== */
+.onboarding-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
+.onboarding-card { position: relative; max-width: 480px; width: 90%; padding: 48px 40px; text-align: center; border-radius: var(--radius-lg); }
+.onboarding-close { position: absolute; top: 16px; right: 16px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--text-secondary); font-size: 18px; border: none; background: transparent; cursor: pointer; }
+.onboarding-close:hover { background: var(--bg-tertiary); }
+.onboarding-steps { display: flex; justify-content: center; gap: 8px; margin-bottom: 32px; }
+.onboarding-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-primary); transition: all var(--transition-fast); }
+.onboarding-dot.active { background: var(--accent); width: 24px; border-radius: 4px; }
+.onboarding-dot.done { background: var(--success); }
+.onboarding-icon { font-size: 48px; margin-bottom: 20px; }
+.onboarding-title { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
+.onboarding-desc { color: var(--text-secondary); font-size: 15px; line-height: 1.6; margin-bottom: 32px; }
+.onboarding-actions { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.onboarding-actions .btn { min-width: 200px; }
+
+/* Sidebar active link */
+.sidebar-link.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* Import in main.tsx alongside pages.css */
