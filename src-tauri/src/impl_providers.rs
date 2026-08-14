@@ -16,12 +16,16 @@ pub struct AnthropicProvider;
 impl AnthropicProvider {
     pub fn new() -> Self { Self }
 
-    pub(crate) fn build_client(config: &ProviderConfig, api_key: &str) -> reqwest::Client {
+    pub(crate) fn build_client(config: &ProviderConfig, api_key: &str) -> AppResult<reqwest::Client> {
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            "x-api-key",
-            reqwest::header::HeaderValue::from_str(api_key).unwrap(),
-        );
+        let api_key_header = reqwest::header::HeaderValue::from_str(api_key).map_err(|_| {
+            AppError::new(
+                codes::PROVIDER_AUTH_ERROR,
+                "API Key 无效",
+                "API Key 包含无法作为 HTTP 请求头使用的字符。",
+            )
+        })?;
+        headers.insert("x-api-key", api_key_header);
         headers.insert(
             "anthropic-version",
             reqwest::header::HeaderValue::from_static("2023-06-01"),
@@ -35,7 +39,14 @@ impl AnthropicProvider {
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .build()
-            .unwrap()
+            .map_err(|e| {
+                AppError::new(
+                    codes::PROVIDER_NETWORK_ERROR,
+                    "HTTP 客户端初始化失败",
+                    "无法构建 HTTP 客户端。",
+                )
+                .with_details(e.to_string())
+            })
     }
 }
 
@@ -60,7 +71,7 @@ impl ProviderAdapter for AnthropicProvider {
 
     async fn test_connection(&self, config: &ProviderConfig) -> AppResult<ConnectionResult> {
         let api_key = resolve_api_key(config).await?;
-        let client = Self::build_client(config, &api_key);
+        let client = Self::build_client(config, &api_key)?;
         let start = Instant::now();
 
         let base_url = config.base_url.trim_end_matches('/');
@@ -124,7 +135,7 @@ impl ProviderAdapter for AnthropicProvider {
 
     async fn detect_models(&self, config: &ProviderConfig) -> AppResult<Vec<ModelInfo>> {
         let api_key = resolve_api_key(config).await?;
-        let client = Self::build_client(config, &api_key);
+        let client = Self::build_client(config, &api_key)?;
         let start = Instant::now();
 
         let base_url = config.base_url.trim_end_matches('/');
@@ -397,7 +408,7 @@ impl CustomProvider {
 impl ProviderAdapter for CustomProvider {
     async fn validate_config(&self, config: &ProviderConfig) -> AppResult<ValidationResult> {
         let mut errors = Vec::new();
-        let mut warnings = Vec::new();
+        let warnings = Vec::new();
 
         if config.base_url.is_empty() {
             errors.push("Base URL 不能为空".to_string());
@@ -413,10 +424,14 @@ impl ProviderAdapter for CustomProvider {
         let api_key = resolve_api_key(config).await?;
 
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            "x-api-key",
-            reqwest::header::HeaderValue::from_str(&api_key).unwrap(),
-        );
+        let api_key_header = reqwest::header::HeaderValue::from_str(&api_key).map_err(|_| {
+            AppError::new(
+                codes::PROVIDER_AUTH_ERROR,
+                "API Key 无效",
+                "API Key 包含无法作为 HTTP 请求头使用的字符。",
+            )
+        })?;
+        headers.insert("x-api-key", api_key_header);
         headers.insert(
             reqwest::header::CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/json"),
@@ -438,7 +453,14 @@ impl ProviderAdapter for CustomProvider {
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .build()
-            .unwrap();
+            .map_err(|e| {
+                AppError::new(
+                    codes::PROVIDER_NETWORK_ERROR,
+                    "HTTP 客户端初始化失败",
+                    "无法构建 HTTP 客户端。",
+                )
+                .with_details(e.to_string())
+            })?;
 
         let start = Instant::now();
         let base_url = config.base_url.trim_end_matches('/');
@@ -488,8 +510,9 @@ impl ProviderAdapter for CustomProvider {
     }
 
     async fn detect_models(&self, config: &ProviderConfig) -> AppResult<Vec<ModelInfo>> {
-        // Try to use Anthropic-compatible models endpoint
-        let api_key = resolve_api_key(config).await?;
+        // Resolve early to validate the credential exists (key is resolved
+        // again inside AnthropicProvider::detect_models for the actual call).
+        let _api_key = resolve_api_key(config).await?;
         let anthropic = AnthropicProvider;
         let mut anon_config = config.clone();
         anon_config.provider_type = "custom".to_string();

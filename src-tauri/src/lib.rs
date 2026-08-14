@@ -36,14 +36,18 @@ pub fn run() {
             task_manager: task::TaskManager::new(),
         })
         .setup(|app| {
-            // Initialize logging plugin
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Debug)
-                        .build(),
-                )?;
-            }
+            // Always initialize logging. Debug builds are verbose; release builds
+            // log at Info level so production issues remain diagnosable.
+            let level = if cfg!(debug_assertions) {
+                log::LevelFilter::Debug
+            } else {
+                log::LevelFilter::Info
+            };
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(level)
+                    .build(),
+            )?;
 
             log::info!("Claude Code Manager started");
 

@@ -2,8 +2,9 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 /// Task status
@@ -72,7 +73,7 @@ pub struct TaskState {
 /// Internal task handle with cancellation support
 struct TaskHandle {
     state: TaskState,
-    cancel_flag: Arc<Mutex<bool>>,
+    cancel_flag: Arc<AtomicBool>,
 }
 
 /// Task manager managing all active tasks
@@ -108,7 +109,7 @@ impl TaskManager {
                 cancellable,
                 error: None,
             },
-            cancel_flag: Arc::new(Mutex::new(false)),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         };
 
         let mut tasks = self.tasks.lock().expect("task lock poisoned");
@@ -134,6 +135,14 @@ impl TaskManager {
         step: Option<String>,
         app: &AppHandle,
     ) {
+        // Sanitize step message before it is stored/emitted (may embed command
+        // output or URLs containing secrets).
+        let step = step.map(|s| {
+            app.state::<crate::AppState>()
+                .log_sanitizer
+                .sanitize(&s)
+                .to_string()
+        });
         let mut tasks = self.tasks.lock().expect("task lock poisoned");
         if let Some(task) = tasks.get_mut(id) {
             task.state.progress = Some(progress);
@@ -156,6 +165,11 @@ impl TaskManager {
 
     /// Mark task as failed
     pub fn fail_task(&self, id: &str, error: String, app: &AppHandle) {
+        // Sanitize the error before it is stored/emitted.
+        let error = app.state::<crate::AppState>()
+            .log_sanitizer
+            .sanitize(&error)
+            .to_string();
         let mut tasks = self.tasks.lock().expect("task lock poisoned");
         if let Some(task) = tasks.get_mut(id) {
             task.state.status = TaskStatus::Failed;
@@ -171,7 +185,7 @@ impl TaskManager {
         let tasks = self.tasks.lock().expect("task lock poisoned");
         if let Some(task) = tasks.get(id) {
             if task.state.cancellable {
-                *task.cancel_flag.lock().expect("cancel lock poisoned") = true;
+                task.cancel_flag.store(true, Ordering::SeqCst);
                 return true;
             }
         }
@@ -183,12 +197,12 @@ impl TaskManager {
         let tasks = self.tasks.lock().expect("task lock poisoned");
         tasks
             .get(id)
-            .map(|t| *t.cancel_flag.lock().expect("cancel lock poisoned"))
+            .map(|t| t.cancel_flag.load(Ordering::SeqCst))
             .unwrap_or(false)
     }
 
     /// Get a cancel flag for a task (to be cloned into spawned tasks)
-    pub fn get_cancel_flag(&self, id: &str) -> Option<Arc<Mutex<bool>>> {
+    pub fn get_cancel_flag(&self, id: &str) -> Option<Arc<AtomicBool>> {
         let tasks = self.tasks.lock().expect("task lock poisoned");
         tasks.get(id).map(|t| Arc::clone(&t.cancel_flag))
     }

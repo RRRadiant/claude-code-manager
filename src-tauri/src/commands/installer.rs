@@ -4,7 +4,9 @@ use tauri::Manager;
 
 #[tauri::command]
 pub async fn generate_install_plan() -> Result<Vec<installer::InstallStepResult>, String> {
-    Ok(installer::generate_install_plan())
+    tauri::async_runtime::spawn_blocking(installer::generate_install_plan)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -12,8 +14,8 @@ pub async fn restart_app(app_handle: tauri::AppHandle) -> Result<(), AppError> {
     log::info!("Restarting app on user request");
     // Brief delay so the frontend can show a message
     std::thread::sleep(std::time::Duration::from_millis(500));
-    app_handle.restart();
-    Ok(())
+    // `restart()` never returns (`!`), so this coerces to the Result type.
+    app_handle.restart()
 }
 
 #[tauri::command]
@@ -35,9 +37,13 @@ pub async fn run_claude() -> Result<String, AppError> {
 
 #[tauri::command]
 pub async fn detect_node_js() -> Result<serde_json::Value, String> {
-    let node_ver = installer::detect_node();
-    let npm_ver = installer::detect_npm();
-    Ok(serde_json::json!({ "node": node_ver, "npm": npm_ver }))
+    tauri::async_runtime::spawn_blocking(|| {
+        let node_ver = installer::detect_node();
+        let npm_ver = installer::detect_npm();
+        serde_json::json!({ "node": node_ver, "npm": npm_ver })
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

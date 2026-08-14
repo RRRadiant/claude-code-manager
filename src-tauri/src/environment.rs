@@ -263,13 +263,24 @@ pub fn detect_node_classified() -> NodeDetectionResult {
     }
 
     // Try known install locations (fallback for broken PATH scenarios)
-    let known_paths = [
-        format!("{}\\AppData\\Roaming\\nvm\\v22.14.0\\node.exe", std::env::var("USERPROFILE").unwrap_or_default()),
-        format!("{}\\AppData\\Roaming\\nvm\\v20.*\\node.exe", std::env::var("USERPROFILE").unwrap_or_default()),
-        format!("{}\\scoop\\apps\\nodejs\\current\\node.exe", std::env::var("USERPROFILE").unwrap_or_default()),
-        "C:\\Program Files\\nodejs\\node.exe".to_string(),
-        "C:\\Program Files (x86)\\nodejs\\node.exe".to_string(),
-    ];
+    let home = std::env::var("USERPROFILE").unwrap_or_default();
+    let mut known_paths: Vec<String> = Vec::new();
+
+    // nvm-for-windows stores each version in a `vX.Y.Z` directory. The previous
+    // literal `v20.*` path never matched, so scan for real version dirs instead.
+    let nvm_root = std::path::Path::new(&home).join("AppData").join("Roaming").join("nvm");
+    if let Ok(entries) = std::fs::read_dir(&nvm_root) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() && p.file_name().map(|n| n.to_string_lossy().starts_with('v')).unwrap_or(false) {
+                known_paths.push(p.join("node.exe").to_string_lossy().to_string());
+            }
+        }
+    }
+
+    known_paths.push(format!("{}\\scoop\\apps\\nodejs\\current\\node.exe", home));
+    known_paths.push("C:\\Program Files\\nodejs\\node.exe".to_string());
+    known_paths.push("C:\\Program Files (x86)\\nodejs\\node.exe".to_string());
     for pattern in &known_paths {
         let path = std::path::Path::new(pattern);
         if path.exists() {
@@ -309,7 +320,15 @@ pub fn detect_windows() -> WindowsInfo {
     let is_arm = arch.contains("ARM") || arch.contains("arm");
     let is_arm64 = is_arm && arch.contains("64");
 
-    let display_arch = if is_arm64 { "arm".to_string() } else { "x86".to_string() };
+    // Previously any non-ARM64 machine (including x64/AMD64) was reported as
+    // "x86". Distinguish arm64 / x64 / x86 correctly.
+    let display_arch = if is_arm64 {
+        "arm64".to_string()
+    } else if arch.to_lowercase().contains("64") {
+        "x64".to_string()
+    } else {
+        "x86".to_string()
+    };
 
     let (version, display_version) = os_version_info();
 
@@ -791,7 +810,7 @@ fn get_claude_code_version(path: &str) -> Option<String> {
     }
 }
 
-fn assess_health(binary_exists: bool, version: &Option<String>) -> Option<String> {
+fn assess_health(binary_exists: bool, _version: &Option<String>) -> Option<String> {
     if !binary_exists {
         return Some("broken".to_string());
     }
@@ -983,7 +1002,7 @@ pub fn detect_node() -> NodeInfo {
 /// Run full environment detection
 pub fn detect_environment() -> EnvironmentStatus {
     let mut warnings = Vec::new();
-    let mut errors = Vec::new();
+    let errors = Vec::new();
 
     let node = detect_node();
     let windows = detect_windows();

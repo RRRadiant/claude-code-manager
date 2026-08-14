@@ -1,11 +1,21 @@
 // Claude Code Manager - Security: input validation, path sanitization, IPC guard
 use crate::error::{AppError, codes};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-/// Validate and normalize a file path, preventing path traversal
-pub fn sanitize_path(input: &str, allowed_roots: &[&Path]) -> Result<PathBuf, AppError> {
-    let path = PathBuf::from(input);
-
+/// Validate and normalize a file path, preventing path traversal.
+///
+/// Resolution strategy (Windows-aware):
+/// 1. Resolve relative inputs against the current working directory.
+/// 2. Walk upward to the deepest *existing* ancestor directory.
+/// 3. `canonicalize` that ancestor (resolves junctions/symlinks, `..`, case).
+/// 4. Lexically append the remaining (non-existent) segments.
+/// 5. Compare the result against `allowed_roots` (directory containment) and
+///    `allowed_files` (exact file match) using case-insensitive comparison.
+pub fn sanitize_path(
+    input: &str,
+    allowed_roots: &[&Path],
+    allowed_files: &[&Path],
+) -> Result<PathBuf, AppError> {
     // Reject empty paths
     if input.is_empty() {
         return Err(AppError::new(
@@ -24,37 +34,32 @@ pub fn sanitize_path(input: &str, allowed_roots: &[&Path]) -> Result<PathBuf, Ap
         ));
     }
 
-    // Canonicalize if path exists; otherwise resolve relative to current dir
-    let canonical = if path.exists() {
-        std::fs::canonicalize(&path)
-            .map_err(|_| {
-                AppError::new(
-                    codes::SECURITY_PATH_TRAVERSAL,
-                    "路径无效",
-                    "无法解析文件路径。",
-                )
-            })?
+    let raw = PathBuf::from(input);
+
+    // Resolve relative paths against cwd so project-scope sources
+    // (e.g. ".mcp.json", ".claude\\settings.json") compare against absolute roots.
+    let path = if raw.is_absolute() {
+        raw
     } else {
-        // For non-existent paths, resolve manually to prevent traversal
-        let resolved = resolve_safe(&path);
-        if let Some(parent) = resolved.parent() {
-            if !parent.exists() {
-                return Err(AppError::new(
-                    codes::SECURITY_PATH_TRAVERSAL,
-                    "父目录不存在",
-                    "目标文件的父目录不存在。",
-                ));
-            }
-        }
-        resolved
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&raw))
+            .unwrap_or(raw)
     };
 
-    // Verify the resolved path is within allowed roots
-    if !allowed_roots.is_empty() {
-        let in_allowed = allowed_roots.iter().any(|root| {
-            canonical.starts_with(root)
+    let canonical = canonicalize_deepest(&path)?;
+
+    // Verify the resolved path is within allowed roots or is an allowed file.
+    let has_restriction = !allowed_roots.is_empty() || !allowed_files.is_empty();
+    if has_restriction {
+        let in_allowed_root = allowed_roots.iter().any(|root| {
+            let root_canon = canonicalize_loose(root);
+            is_within(&canonical, &root_canon)
         });
-        if !in_allowed {
+        let is_allowed_file = allowed_files.iter().any(|file| {
+            let file_canon = canonicalize_loose(file);
+            is_same_path(&canonical, &file_canon)
+        });
+        if !in_allowed_root && !is_allowed_file {
             return Err(AppError::new(
                 codes::SECURITY_PATH_TRAVERSAL,
                 "路径访问被拒绝",
@@ -66,21 +71,103 @@ pub fn sanitize_path(input: &str, allowed_roots: &[&Path]) -> Result<PathBuf, Ap
     Ok(canonical)
 }
 
+/// Find the deepest existing ancestor directory, canonicalize it, then lexically
+/// append the remaining non-existent segments.
+fn canonicalize_deepest(path: &Path) -> Result<PathBuf, AppError> {
+    // Own the "leaf" components (Normal / CurDir / ParentDir) so we can mutate
+    // `existing` below without fighting the borrow checker over `Component`.
+    let mut segments: Vec<std::ffi::OsString> = path
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(p) => Some(p.to_os_string()),
+            Component::ParentDir => Some(std::ffi::OsString::from("..")),
+            Component::CurDir => Some(std::ffi::OsString::from(".")),
+            _ => None,
+        })
+        .collect();
+
+    // Walk upward to the deepest existing directory, remembering the segments
+    // we trimmed off (in reverse order).
+    let mut existing = path.to_path_buf();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    while !existing.is_dir() {
+        match segments.pop() {
+            Some(seg) => {
+                tail.push(seg);
+                existing.pop();
+            }
+            None => break,
+        }
+    }
+
+    let base = std::fs::canonicalize(&existing).map_err(|_| {
+        AppError::new(
+            codes::SECURITY_PATH_TRAVERSAL,
+            "路径无效",
+            "无法解析文件路径的祖先目录。",
+        )
+    })?;
+
+    // Lexically re-append the trimmed tail. ParentDir segments here are purely
+    // defensive: `..` inside the existing portion is already resolved by
+    // canonicalize, and any `..` that would escape the canonical base is rejected.
+    let mut result = base;
+    for seg in tail.into_iter().rev() {
+        let s = seg.to_string_lossy();
+        if s == ".." {
+            if !result.pop() {
+                return Err(AppError::new(
+                    codes::SECURITY_PATH_TRAVERSAL,
+                    "路径访问被拒绝",
+                    "路径包含过多的上级目录引用。",
+                ));
+            }
+        } else if s != "." {
+            result.push(seg);
+        }
+    }
+    Ok(result)
+}
+
+/// Canonicalize when possible, otherwise fall back to the literal path.
+fn canonicalize_loose(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Case-insensitive (Windows) normalized string form of a path.
+fn normalized(path: &Path) -> String {
+    path.to_string_lossy()
+        .trim_end_matches(['\\', '/'])
+        .to_lowercase()
+}
+
+/// Case-insensitive containment check: `path` is `root` or a descendant of it.
+fn is_within(path: &Path, root: &Path) -> bool {
+    let p = normalized(path);
+    let r = normalized(root);
+    p == r || p.starts_with(&format!("{}\\", r))
+}
+
+/// Case-insensitive equality check between two paths.
+fn is_same_path(a: &Path, b: &Path) -> bool {
+    normalized(a) == normalized(b)
+}
+
 /// Safely resolve a path without following symlinks (prevents TOCTOU)
 pub fn resolve_safe(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
-            std::path::Component::Prefix(prefix) => {
+            Component::Prefix(prefix) => {
                 result.push(prefix.as_os_str());
             }
-            std::path::Component::RootDir => {
-                result.push(std::path::Component::RootDir);
+            Component::RootDir => {
+                result.push(Component::RootDir);
             }
-            std::path::Component::ParentDir => {
+            Component::ParentDir => {
                 result.pop();
             }
-            std::path::Component::Normal(part) => {
+            Component::Normal(part) => {
                 result.push(part);
             }
             _ => {}
@@ -120,54 +207,109 @@ pub fn validate_shell_arg(input: &str) -> Result<&str, AppError> {
     Ok(input)
 }
 
-/// Validate an MCP command (no relative paths, no shell injection)
+/// Validate an MCP command against a strict **allowlist** of bare executable names.
+///
+/// This replaces the previous blacklist (which `powershell -EncodedCommand <b64>`
+/// could bypass). Only well-known package runners / runtimes are permitted, and
+/// the command must be a single bare file name: no path separators, no drive
+/// letter, no parent traversal. The allowlist is matched on the file stem
+/// (so `npx`, `npx.exe`, `npx.cmd` all resolve to `npx`), case-insensitively.
 pub fn validate_mcp_command(command: &str) -> Result<(), AppError> {
-    let path = Path::new(command);
+    const ALLOWED: &[&str] = &[
+        "npx", "npm", "node", "uvx", "uv", "python", "python3", "py", "bun", "deno",
+        "docker", "cargo", "git", "claude", "go",
+    ];
 
-    // Must not be a relative path with traversal
-    if path.components().any(|c| c == std::path::Component::ParentDir) {
+    if command.is_empty() {
         return Err(AppError::new(
-            codes::SECURITY_PATH_TRAVERSAL,
+            codes::SECURITY_INVALID_INPUT,
             "命令路径无效",
-            "MCP 命令不能包含相对路径。",
+            "MCP 命令不能为空。",
         ));
     }
 
-    // Must not contain shell metacharacters
-    validate_shell_arg(command)?;
+    // Reject anything that is not a single bare file-name component. Paths with
+    // separators, drive prefixes or `..` are all rejected outright.
+    let path = Path::new(command);
+    let mut components = path.components();
+    let sole = components.next();
+    if !matches!(sole, Some(Component::Normal(_))) || components.next().is_some() {
+        return Err(AppError::new(
+            codes::SECURITY_PATH_TRAVERSAL,
+            "命令路径无效",
+            "MCP 命令必须是裸可执行文件名（不允许路径或盘符）。",
+        ));
+    }
 
-    Ok(())
+    // Defensive: even if `components()` normalises odd inputs, reject any
+    // explicit separator / drive marker in the raw string.
+    if command.contains('/') || command.contains('\\') || command.contains(':') {
+        return Err(AppError::new(
+            codes::SECURITY_PATH_TRAVERSAL,
+            "命令路径无效",
+            "MCP 命令不能包含路径分隔符或盘符。",
+        ));
+    }
+
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_else(|| command.to_lowercase());
+
+    if ALLOWED.iter().any(|a| a.eq_ignore_ascii_case(&stem)) {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            codes::SECURITY_INVALID_INPUT,
+            "命令未授权",
+            format!("MCP 命令 '{}' 不在允许列表内。", command),
+        ))
+    }
 }
 
 /// Build the list of directories where MCP config files may legitimately live.
 /// Used by `sanitize_path` to confine MCP write/delete operations.
 ///
-/// Roots:
+/// Directories (whole subtrees):
 /// - `%USERPROFILE%\.claude` (user config)
 /// - `%APPDATA%\Claude` (Claude Desktop)
-/// - current working directory + `.claude` and `.mcp.json` (project scope)
+/// - current working directory + `.claude` (project scope)
 pub fn mcp_allowed_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
     if let Ok(home) = std::env::var("USERPROFILE") {
         roots.push(PathBuf::from(&home).join(".claude"));
-        // `.claude.json` lives directly under home — allow the home dir itself
-        // is too broad; instead we allow specific files via parent checks below.
-        // We add home so `.claude.json` (root-level) is writable.
-        roots.push(PathBuf::from(&home));
     }
 
     if let Ok(appdata) = std::env::var("APPDATA") {
         roots.push(PathBuf::from(&appdata).join("Claude"));
     }
 
-    // Project-scope: current working directory
     if let Ok(cwd) = std::env::current_dir() {
-        roots.push(cwd.clone());
         roots.push(cwd.join(".claude"));
     }
 
     roots
+}
+
+/// Build the list of individual files (not whole directories) that may be
+/// written/deleted. Root-level single-file configs cannot be covered by a
+/// directory root without also allowing the whole home/cwd directory, so they
+/// are allow-listed here instead.
+pub fn mcp_allowed_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+
+    if let Ok(home) = std::env::var("USERPROFILE") {
+        files.push(PathBuf::from(&home).join(".claude.json"));
+        files.push(PathBuf::from(&home).join(".mcp.json"));
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        files.push(cwd.join(".mcp.json"));
+        files.push(cwd.join(".claude.json"));
+    }
+
+    files
 }
 
 /// Check if the application has admin/elevated privileges
@@ -189,21 +331,20 @@ mod tests {
 
     #[test]
     fn test_sanitize_path_normal() {
-        // Use an existing directory path to test canonicalization
         let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
-        let result = sanitize_path(&home, &[]);
+        let result = sanitize_path(&home, &[], &[]);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_reject_null_bytes() {
-        let result = sanitize_path("C:\\Users\\test\\.claude\\settings.json\0", &[]);
+        let result = sanitize_path("C:\\Users\\test\\.claude\\settings.json\0", &[], &[]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_reject_empty_path() {
-        let result = sanitize_path("", &[]);
+        let result = sanitize_path("", &[], &[]);
         assert!(result.is_err());
     }
 
@@ -229,12 +370,35 @@ mod tests {
     #[test]
     fn test_validate_mcp_command_valid() {
         assert!(validate_mcp_command("npx").is_ok());
-        assert!(validate_mcp_command("C:\\Program Files\\node\\node.exe").is_ok());
+        assert!(validate_mcp_command("node.exe").is_ok());
+        assert!(validate_mcp_command("npm.cmd").is_ok());
     }
 
     #[test]
-    fn test_validate_mcp_command_traversal() {
+    fn test_validate_mcp_command_whitelist_rejects_paths() {
+        // Absolute paths are now rejected by the whitelist.
+        assert!(validate_mcp_command("C:\\Program Files\\node\\node.exe").is_err());
         assert!(validate_mcp_command("../malicious").is_err());
+        assert!(validate_mcp_command("..\\malicious").is_err());
+    }
+
+    #[test]
+    fn test_validate_mcp_command_whitelist_rejects_unknown() {
+        assert!(validate_mcp_command("powershell").is_err());
+        assert!(validate_mcp_command("cmd").is_err());
+        assert!(validate_mcp_command("bash").is_err());
+        assert!(validate_mcp_command("python.exe").is_ok());
+        assert!(validate_mcp_command("python3").is_ok());
+        assert!(validate_mcp_command("cargo").is_ok());
+        assert!(validate_mcp_command("go").is_ok());
+        assert!(validate_mcp_command("uvx").is_ok());
+    }
+
+    #[test]
+    fn test_validate_mcp_command_rejects_encoded_command() {
+        // The classic bypass vector: powershell -EncodedCommand must be refused.
+        assert!(validate_mcp_command("powershell").is_err());
+        assert!(validate_mcp_command("pOwErShElL.exe").is_err());
     }
 
     #[test]
@@ -250,16 +414,15 @@ mod tests {
     fn test_sanitize_path_within_allowed_root() {
         let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
         let root = Path::new(&home);
-        // canonicalize root to match sanitize_path's internal resolution
         let canonical_root = std::fs::canonicalize(&home).unwrap_or_else(|_| root.to_path_buf());
-        let result = sanitize_path(&home, &[&canonical_root]);
+        let result = sanitize_path(&home, &[&canonical_root], &[]);
         assert!(result.is_ok(), "path within root should be allowed");
     }
 
     #[test]
     fn test_sanitize_path_outside_allowed_roots() {
         let root = Path::new("C:\\Windows");
-        let result = sanitize_path("C:\\Program Files\\test.txt", &[root]);
+        let result = sanitize_path("C:\\Program Files\\test.txt", &[root], &[]);
         assert!(result.is_err(), "path outside root should be rejected");
         if let Err(ref e) = result {
             assert_eq!(e.code, codes::SECURITY_PATH_TRAVERSAL);
@@ -269,37 +432,36 @@ mod tests {
     #[test]
     fn test_sanitize_path_multiple_roots_second_matches() {
         let roots = &[Path::new("C:\\Users"), Path::new("C:\\Windows")];
-        let result = sanitize_path("C:\\Users\\Public\\test.txt", roots);
+        let result = sanitize_path("C:\\Users\\Public\\test.txt", roots, &[]);
         assert!(result.is_ok(), "path matching any allowed root should pass");
     }
 
     #[test]
     fn test_sanitize_path_multiple_roots_none_match() {
         let roots = &[Path::new("C:\\Users"), Path::new("C:\\ProgramData")];
-        let result = sanitize_path("D:\\data\\file.txt", roots);
+        let result = sanitize_path("D:\\data\\file.txt", roots, &[]);
         assert!(result.is_err(), "path outside all roots should be rejected");
     }
 
     #[test]
     fn test_sanitize_path_empty_allowed_roots() {
-        // Passing empty slice for allowed_roots means no restriction
         let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
-        let result = sanitize_path(&home, &[]);
+        let result = sanitize_path(&home, &[], &[]);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_sanitize_path_non_existent_valid_parent() {
-        // File doesn't exist but parent (C:\Windows) does
-        let result = sanitize_path("C:\\Windows\\_test_tmp_file_12345.tmp", &[]);
+        let result = sanitize_path("C:\\Windows\\_test_tmp_file_12345.tmp", &[], &[]);
         assert!(result.is_ok(), "non-existent file with valid parent should resolve");
     }
 
     #[test]
-    fn test_sanitize_path_non_existent_invalid_parent() {
-        // Neither file nor parent directory exists
-        let result = sanitize_path("C:\\_nonexistent_dir_98765\\file.txt", &[]);
-        assert!(result.is_err(), "should reject when parent does not exist");
+    fn test_sanitize_path_non_existent_under_existing_ancestor() {
+        // New algorithm: deepest existing ancestor (C:\) is canonicalized and the
+        // remaining non-existent segments are lexically appended.
+        let result = sanitize_path("C:\\_nonexistent_dir_98765\\file.txt", &[], &[]);
+        assert!(result.is_ok(), "deepest-ancestor resolution should succeed");
     }
 
     #[test]
@@ -307,7 +469,7 @@ mod tests {
         let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
         let root = Path::new(&home);
         let canonical_root = std::fs::canonicalize(&home).unwrap_or_else(|_| root.to_path_buf());
-        let result = sanitize_path(&home, &[&canonical_root]);
+        let result = sanitize_path(&home, &[&canonical_root], &[]);
         assert!(result.is_ok(), "traversal that stays within root should pass");
     }
 
@@ -315,22 +477,39 @@ mod tests {
     fn test_sanitize_path_traversal_outside_root() {
         let root = Path::new("C:\\Windows\\System32");
         // ..\\.. lands in C:\ which is outside C:\Windows\System32
-        let result = sanitize_path("C:\\Windows\\System32\\..\\..\\Program Files", &[root]);
+        let result = sanitize_path("C:\\Windows\\System32\\..\\..\\Program Files", &[root], &[]);
         assert!(result.is_err(), "traversal escaping root should be rejected");
+    }
+
+    #[test]
+    fn test_sanitize_path_allowed_file() {
+        // A root-level file must only be allowed via the file allow-list, not a dir root.
+        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+        let file = PathBuf::from(&home).join(".claude.json");
+        let result = sanitize_path(&file.to_string_lossy(), &[], &[&file.as_path()]);
+        assert!(result.is_ok(), "allow-listed file should pass");
+    }
+
+    #[test]
+    fn test_sanitize_path_file_not_allowed() {
+        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+        let file = PathBuf::from(&home).join(".claude.json");
+        // A non-matching root with empty file list => rejected.
+        let root = Path::new("C:\\Windows");
+        let result = sanitize_path(&file.to_string_lossy(), &[root], &[]);
+        assert!(result.is_err(), "file outside roots and file list should be rejected");
     }
 
     // ── validate_shell_arg edge cases ────────────────────────────
 
     #[test]
     fn test_validate_shell_arg_length_boundary() {
-        // 4096 characters — boundary check: limit is `> 4096`, so 4096 passes
         let len_4096 = "a".repeat(4096);
         assert!(validate_shell_arg(&len_4096).is_ok(), "4096 should be within limit");
     }
 
     #[test]
     fn test_validate_shell_arg_max_valid_length() {
-        // 4095 characters should be accepted
         let len_4095 = "a".repeat(4095);
         assert!(validate_shell_arg(&len_4095).is_ok(), "4095 chars should be within limit");
     }
@@ -360,13 +539,11 @@ mod tests {
 
     #[test]
     fn test_validate_shell_arg_unicode_safe() {
-        // Unicode characters are not in the dangerous set
         assert!(validate_shell_arg("npx-很好").is_ok());
     }
 
     #[test]
     fn test_validate_shell_arg_numbers_and_symbols() {
-        // Safe symbols: ., -, _, /, \, :, @, #, %, +, =, ~, !, ?
         assert!(validate_shell_arg("--flag=value").is_ok());
         assert!(validate_shell_arg("path/to/file@1.0").is_ok());
         assert!(validate_shell_arg("C:\\Program Files\\app.exe").is_ok());
@@ -376,12 +553,10 @@ mod tests {
 
     #[test]
     fn test_validate_mcp_command_control_chars() {
-        // The current implementation does not reject null bytes in MCP commands;
-        // it only rejects path traversal (ParentDir) and shell metacharacters.
-        // This test documents that behavior.
+        // Tab is not a path separator and the stem becomes the whole weird string,
+        // which is not in the allowlist — so it must be rejected now.
         let result = validate_mcp_command("C:\\test\tmalicious");
-        // Tab is not in the dangerous chars list — test documents current behavior
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     #[test]
@@ -392,9 +567,9 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_mcp_command_absolute_path_valid() {
-        assert!(validate_mcp_command("C:\\Program Files\\node\\node.exe").is_ok());
-        assert!(validate_mcp_command("C:\\tools\\claude.exe").is_ok());
+    fn test_validate_mcp_command_absolute_path_rejected() {
+        assert!(validate_mcp_command("C:\\Program Files\\node\\node.exe").is_err());
+        assert!(validate_mcp_command("C:\\tools\\claude.exe").is_err());
     }
 
     #[test]
@@ -402,6 +577,7 @@ mod tests {
         assert!(validate_mcp_command("npx").is_ok());
         assert!(validate_mcp_command("npm").is_ok());
         assert!(validate_mcp_command("claude").is_ok());
+        assert!(validate_mcp_command("CLAUDE").is_ok());
     }
 
     #[test]
@@ -434,14 +610,8 @@ mod tests {
 
     #[test]
     fn test_resolve_safe_traversal_below_root() {
-        // .. on root dir should be a no-op (pop on root does nothing)
         let path = Path::new("C:\\..\\Windows");
         let resolved = resolve_safe(path);
-        // On Windows: C:\ -> pop RootDir -> C: -> push Windows -> C:\Windows...
-        // Actually PathBuf::from("C:\\..") components: Prefix("C:"), RootDir, ParentDir
-        // resolve_safe: push C:, push RootDir, pop -> C:
-        // Then push Windows -> C:Windows
-        // Hmm, but that's not right. Let me just check it doesn't crash.
         assert!(!resolved.as_os_str().is_empty());
     }
 
@@ -456,9 +626,7 @@ mod tests {
 
     #[test]
     fn test_is_elevated_no_panic() {
-        // Should never panic regardless of admin status
         let elevated = is_elevated();
-        // It returns a bool — just no crash
         let _ = elevated;
     }
 
@@ -466,8 +634,7 @@ mod tests {
 
     #[test]
     fn test_validate_shell_arg_then_validate_mcp() {
-        // Commands that pass shell arg validation should also pass MCP validation
-        let valid = ["npx", "npm", "node", "C:\\tools\\app.exe"];
+        let valid = ["npx", "npm", "node", "claude"];
         for cmd in &valid {
             assert!(validate_shell_arg(cmd).is_ok(), "shell arg should accept '{}'", cmd);
             assert!(validate_mcp_command(cmd).is_ok(), "mcp cmd should accept '{}'", cmd);
@@ -476,7 +643,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_path_with_null_byte_in_middle() {
-        let result = sanitize_path("C:\\Users\\test\0\\config.json", &[]);
+        let result = sanitize_path("C:\\Users\\test\0\\config.json", &[], &[]);
         assert!(result.is_err(), "null byte in path should be rejected");
     }
 }

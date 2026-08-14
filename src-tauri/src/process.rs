@@ -1,5 +1,6 @@
 // Claude Code Manager - Command executor: safe process execution
-use crate::error::{AppError, codes, AppResult};
+use crate::error::{AppError, AppResult};
+use crate::logging::LogSanitizer;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,6 +8,10 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::io::AsyncReadExt;
 use tokio::time::timeout;
+
+/// Maximum bytes of stdout/stderr to capture per process, to bound memory usage
+/// from a runaway child process.
+const MAX_OUTPUT_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Specification for a command to execute
 #[derive(Debug, Clone)]
@@ -64,7 +69,6 @@ pub async fn execute_command(
 
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
 
@@ -78,7 +82,7 @@ pub async fn execute_command(
     let stdout_handle = child.stdout.take();
     let stderr_handle = child.stderr.take();
 
-    // Spawn async reader tasks
+    // Spawn async reader tasks (bounded output capture)
     let stdout_task = tokio::spawn(read_all(stdout_handle));
     let stderr_task = tokio::spawn(read_all_stderr(stderr_handle));
 
@@ -87,7 +91,7 @@ pub async fn execute_command(
         loop {
             if let Some(ref flag) = cancel_flag {
                 if flag.load(Ordering::SeqCst) {
-                    let _ = child.kill().await;
+                    kill_process_tree(&mut child).await;
                     return Err(AppError::new(
                         "INSTALL_CANCELLED", "操作已取消", "用户取消了操作。"));
                 }
@@ -101,12 +105,20 @@ pub async fn execute_command(
         }
     }).await;
 
-    // Kill if timed out
-    let _ = child.kill().await;
+    // On timeout, kill the whole process tree; on success/cancel leave it be.
+    let timed_out = wait_result.is_err();
+    if timed_out {
+        kill_process_tree(&mut child).await;
+    }
 
     // Collect output from reader tasks
     let stdout = stdout_task.await.unwrap_or_else(|_| String::new());
     let stderr = stderr_task.await.unwrap_or_else(|_| String::new());
+
+    // Sanitize secrets before the output is surfaced to callers/logs/UI.
+    let sanitizer = LogSanitizer::new();
+    let stdout = sanitizer.sanitize(&stdout).to_string();
+    let stderr = sanitizer.sanitize(&stderr).to_string();
 
     match wait_result {
         Ok(Ok(exit_code)) => Ok(ProcessOutput {
@@ -121,10 +133,34 @@ pub async fn execute_command(
     }
 }
 
+/// Kill a child process and (on Windows) its entire process tree via `taskkill`.
+#[cfg(windows)]
+async fn kill_process_tree(child: &mut tokio::process::Child) {
+    if let Some(pid) = child.id() {
+        let _ = tokio::process::Command::new("taskkill")
+            .arg("/PID")
+            .arg(pid.to_string())
+            .arg("/T")
+            .arg("/F")
+            .creation_flags(0x08000000)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+    }
+    let _ = child.kill().await;
+}
+
+#[cfg(not(windows))]
+async fn kill_process_tree(child: &mut tokio::process::Child) {
+    let _ = child.kill().await;
+}
+
 async fn read_all(handle: Option<tokio::process::ChildStdout>) -> String {
     let mut h = match handle { Some(h) => h, None => return String::new() };
     let mut buf = Vec::new();
-    h.read_to_end(&mut buf).await.ok();
+    let mut limited = h.take(MAX_OUTPUT_BYTES);
+    let _ = limited.read_to_end(&mut buf).await;
     String::from_utf8_lossy(&buf).to_string()
 }
 
@@ -132,7 +168,8 @@ async fn read_all(handle: Option<tokio::process::ChildStdout>) -> String {
 async fn read_all_stderr(handle: Option<tokio::process::ChildStderr>) -> String {
     let mut h = match handle { Some(h) => h, None => return String::new() };
     let mut buf = Vec::new();
-    h.read_to_end(&mut buf).await.ok();
+    let mut limited = h.take(MAX_OUTPUT_BYTES);
+    let _ = limited.read_to_end(&mut buf).await;
     String::from_utf8_lossy(&buf).to_string()
 }
 

@@ -258,7 +258,9 @@ pub fn update_server_config(
     // SECURITY: confine writes to known MCP config locations
     let roots = crate::security::mcp_allowed_roots();
     let root_refs: Vec<&std::path::Path> = roots.iter().map(|p| p.as_path()).collect();
-    let path = crate::security::sanitize_path(source_file, &root_refs)?;
+    let files = crate::security::mcp_allowed_files();
+    let file_refs: Vec<&std::path::Path> = files.iter().map(|p| p.as_path()).collect();
+    let path = crate::security::sanitize_path(source_file, &root_refs, &file_refs)?;
     let content = if path.exists() { std::fs::read_to_string(&path)? } else { "{}".to_string() };
 
     let mut root: serde_json::Value = serde_json::from_str(&content)
@@ -266,7 +268,9 @@ pub fn update_server_config(
             .with_details(e.to_string()))?;
     if !root.is_object() { root = serde_json::json!({"mcpServers":{}}); }
     if root.get("mcpServers").is_none() {
-        root.as_object_mut().unwrap().insert("mcpServers".into(), serde_json::json!({}));
+        if let Some(obj) = root.as_object_mut() {
+            obj.insert("mcpServers".into(), serde_json::json!({}));
+        }
     }
     if let Some(orig) = original_name { if orig != name {
         if let Some(o) = root.get_mut("mcpServers").and_then(|v|v.as_object_mut()) { o.remove(orig); }
@@ -285,7 +289,9 @@ pub fn delete_server_config(source_file: &str, name: &str) -> AppResult<()> {
     // SECURITY: confine deletes to known MCP config locations
     let roots = crate::security::mcp_allowed_roots();
     let root_refs: Vec<&std::path::Path> = roots.iter().map(|p| p.as_path()).collect();
-    let path = crate::security::sanitize_path(source_file, &root_refs)?;
+    let files = crate::security::mcp_allowed_files();
+    let file_refs: Vec<&std::path::Path> = files.iter().map(|p| p.as_path()).collect();
+    let path = crate::security::sanitize_path(source_file, &root_refs, &file_refs)?;
     if !path.exists() { return Ok(()); }
     let content = std::fs::read_to_string(&path)?;
     let mut root: serde_json::Value = serde_json::from_str(&content)
@@ -348,6 +354,9 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
         },
     };
 
+    // SAFETY: stdin/stdout/stderr were configured as `Stdio::piped()` above, so
+    // `take()` always yields `Some` here. These unwraps cannot be triggered by
+    // user input.
     let stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -367,6 +376,7 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
         }
     });
 
+    // SAFETY: serializing a `serde_json::Value` never fails.
     let mut init_str = serde_json::to_string(&init_request).unwrap();
     init_str.push('\n');
 
@@ -504,10 +514,20 @@ pub async fn test_http_server(def: &McpServerDef) -> McpTestResult {
         },
     };
 
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .danger_accept_invalid_certs(false)
-        .build().unwrap();
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return McpTestResult {
+            success: false, protocol_version: None, server_name: None,
+            server_version: None, tool_count: None, tool_names: vec![],
+            response_time_ms: start.elapsed().as_millis() as u64,
+            stdout_summary: None, stderr_summary: None,
+            suggestions: vec![format!("HTTP 客户端初始化失败: {}", e)],
+        },
+    };
 
     let init_payload = serde_json::json!({
         "jsonrpc": "2.0",

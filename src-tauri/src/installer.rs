@@ -32,7 +32,7 @@ use serde::Serialize;
 
 use std::sync::Arc;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use std::time::Duration;
 
@@ -418,62 +418,106 @@ fn ensure_cache_dir() -> std::io::Result<()> {
 
 fn cached_file_path(filename: &str) -> String { format!("{}\\{}", cache_dir(), filename) }
 
-fn is_file_cached(path: &str) -> bool { std::path::Path::new(path).exists() && std::fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false) }
+/// Compute the SHA256 of a file using Windows' built-in `certutil` (no new
+/// dependencies required).
+#[cfg(windows)]
+fn sha256_file(path: &str) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    let output = std::process::Command::new("certutil")
+        .args(["-hashfile", path, "SHA256"])
+        .creation_flags(0x08000000)
+        .output()
+        .ok()?;
+    if !output.status.success() { return None; }
+    let text = String::from_utf8(output.stdout).ok()?;
+    // certutil prints: line 0 = header, line 1 = hex digest.
+    text.lines().nth(1).map(|s| s.trim().to_lowercase())
+}
 
+#[cfg(not(windows))]
+fn sha256_file(_path: &str) -> Option<String> { None }
 
+/// Verify a downloaded Node.js archive against the official SHASUMS256.txt
+/// (always fetched over HTTPS from nodejs.org, even when the archive itself
+/// came from a mirror).
+async fn verify_node_sha256(zip_path: &str) -> AppResult<()> {
+    let shasums_url = format!("https://nodejs.org/dist/{}/SHASUMS256.txt", NODE_VERSION);
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()
+        .map_err(|e| AppError::new("NET_ERR", "Network error", format!("{}", e)))?;
+    let text = client.get(&shasums_url).send().await
+        .map_err(|e| AppError::new("VERIFY_FAIL", "Checksum download failed", format!("{}", e)).retryable())?
+        .error_for_status()
+        .map_err(|e| AppError::new("VERIFY_FAIL", "Checksum download failed", format!("{}", e)).retryable())?
+        .text().await
+        .map_err(|e| AppError::new("VERIFY_FAIL", "Checksum read failed", format!("{}", e)))?;
+
+    let expected = text.lines()
+        .find(|l| l.contains(NODE_ZIP))
+        .and_then(|l| l.split_whitespace().next())
+        .map(|h| h.trim().to_lowercase())
+        .ok_or_else(|| AppError::new(
+            "VERIFY_FAIL", "Verification failed",
+            format!("SHASUMS256.txt 中未找到 {} 的条目。", NODE_ZIP),
+        ))?;
+
+    let actual = sha256_file(zip_path)
+        .ok_or_else(|| AppError::new("VERIFY_FAIL", "Verification failed", "无法计算下载文件的 SHA256。"))?;
+
+    if actual != expected {
+        return Err(AppError::new(
+            "VERIFY_FAIL", "Verification failed",
+            "Node.js 下载校验失败（SHA256 不匹配）。",
+        ).retryable());
+    }
+    Ok(())
+}
 
 async fn download_file(url: &str, dest: &str, app: &AppHandle, task_id: &str) -> AppResult<()> {
-
     let client = reqwest::Client::builder().timeout(Duration::from_secs(300)).build()
-
         .map_err(|e| AppError::new("NET_ERR", "Network error", format!("{}", e)))?;
 
     let response = client.get(url).send().await
-
         .map_err(|e| AppError::new("DL_FAIL", "Download failed", format!("{}", e)).retryable())?;
 
+    if !response.status().is_success() {
+        return Err(AppError::new("DL_FAIL", "Download failed", format!("HTTP {}", response.status())).retryable());
+    }
+
     let total_size = response.content_length().unwrap_or(0);
-
     let mut downloaded: u64 = 0;
-
     let start = std::time::Instant::now();
 
-    let mut file = tokio::fs::File::create(dest).await
-
+    // Download to a `.part` temp file, then atomically rename on completion so a
+    // partial download is never mistaken for a valid cached file.
+    let part = format!("{}.part", dest);
+    let mut file = tokio::fs::File::create(&part).await
         .map_err(|e| AppError::new("DL_FAIL", "File error", format!("{}", e)))?;
 
     let mut stream = response.bytes_stream();
-
     use futures_util::StreamExt;
-
     while let Some(chunk) = stream.next().await {
-
         let chunk = chunk.map_err(|e| AppError::new("DL_FAIL", "Stream error", format!("{}", e)).retryable())?;
-
         use tokio::io::AsyncWriteExt;
-
         file.write_all(&chunk).await.map_err(|e| AppError::new("DL_FAIL", "Write error", format!("{}", e)))?;
-
         downloaded += chunk.len() as u64;
-
         let elapsed = start.elapsed().as_secs_f64();
-
         let speed = if elapsed > 0.0 { downloaded as f64 / elapsed } else { 0.0 };
-
         let percent = if total_size > 0 { (downloaded as f64 / total_size as f64) * 100.0 } else { 0.0 };
-
         let _ = app.emit("download-progress", DownloadProgress {
-
             stage: "downloading".into(), percent, speed_bytes_per_sec: speed,
-
             downloaded_bytes: downloaded, total_bytes: total_size, source: url.into(),
-
         });
-
     }
 
-    file.sync_all().await.map_err(|e| AppError::new("DL_FAIL", "Sync error", format!("{}", e)))
+    file.sync_all().await.map_err(|e| AppError::new("DL_FAIL", "Sync error", format!("{}", e)))?;
+    drop(file);
 
+    if let Err(e) = std::fs::rename(&part, dest) {
+        let _ = std::fs::remove_file(&part);
+        return Err(AppError::new("DL_FAIL", "Rename error", format!("{}", e)));
+    }
+    let _ = task_id;
+    Ok(())
 }
 
 
@@ -556,19 +600,33 @@ async fn install_node_portable(task_id: &str, app: &AppHandle) -> AppResult<Inst
 
     tm.update_progress(task_id, 10.0, Some("Testing sources...".into()), app);
 
-    let (url, src_id) = select_fastest_source(NODE_VERSION, NODE_ZIP).await;
+    let (url, _src_id) = select_fastest_source(NODE_VERSION, NODE_ZIP).await;
 
     let cp = cached_file_path(NODE_ZIP);
 
-    if !is_file_cached(&cp) {
+    // A cached archive is only trusted after a full SHA256 verification. A
+    // stale/partial cache is removed and re-downloaded.
+    let cached_ok = if std::path::Path::new(&cp).exists() {
+        match verify_node_sha256(&cp).await {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("Node.js cache failed verification ({e}); re-downloading");
+                let _ = std::fs::remove_file(&cp);
+                false
+            }
+        }
+    } else {
+        false
+    };
 
+    if !cached_ok {
         tm.update_progress(task_id, 20.0, Some(format!("Downloading Node.js {}...", NODE_VERSION)), app);
-
         download_file(&url, &cp, app, task_id).await?;
-
         tm.update_progress(task_id, 60.0, Some("Verifying...".into()), app);
-
-    } else { tm.update_progress(task_id, 40.0, Some("Using cache...".into()), app); }
+        verify_node_sha256(&cp).await?;
+    } else {
+        tm.update_progress(task_id, 40.0, Some("Using verified cache...".into()), app);
+    }
 
     tm.update_progress(task_id, 50.0, Some("Extracting...".into()), app);
 
@@ -876,19 +934,9 @@ pub async fn install_claude(task_id: &str, app: &AppHandle) -> AppResult<Install
 
 
 fn get_cancel_flag(tm: &TaskManager, task_id: &str) -> Option<Arc<AtomicBool>> {
-
-    tm.get_cancel_flag(task_id).map(|m| {
-
-        let flag = Arc::new(AtomicBool::new(false));
-
-        let f = flag.clone();
-
-        std::thread::spawn(move || { for _ in 0..600 { if *m.lock().unwrap() { f.store(true, Ordering::SeqCst); break; } std::thread::sleep(Duration::from_millis(200)); } });
-
-        flag
-
-    })
-
+    // The task manager now stores an `Arc<AtomicBool>` directly, so we can pass
+    // it through without the previous 120s polling bridge thread.
+    tm.get_cancel_flag(task_id)
 }
 
 
@@ -929,14 +977,36 @@ pub async fn run_full_install(task_id: &str, app: &AppHandle) -> AppResult<Vec<I
 
     refresh_env();
 
-    tm.update_progress(task_id, 50.0, Some("Installing Git...".into()), app);
+    tm.update_progress(task_id, 30.0, Some("Installing Git...".into()), app);
     match install_git(task_id, app).await { Ok(r) => results.push(r), Err(e) => results.push(InstallStepResult { component: "Git".into(), success: false, version: None, message: e.message }) }
 
     refresh_env();
 
+    // Install the actual Claude Code binary too (previously missing): it depends
+    // on npm, which ships with the Node.js step above.
+    let node_ok = results.iter().any(|r| r.component == "Node.js" && r.success);
+    if node_ok {
+        tm.update_progress(task_id, 60.0, Some("Installing Claude Code...".into()), app);
+        match install_claude(task_id, app).await {
+            Ok(r) => results.push(r),
+            Err(e) => results.push(InstallStepResult { component: "Claude Code".into(), success: false, version: None, message: e.message }),
+        }
+    } else {
+        results.push(InstallStepResult {
+            component: "Claude Code".into(),
+            success: false,
+            version: None,
+            message: "Node.js/npm 未安装，跳过 Claude Code 安装。".into(),
+        });
+    }
+
+    refresh_env();
+
     if results.iter().all(|r| r.success) {
-        tm.update_progress(task_id, 90.0, Some("Base ready, restart for Claude Code".into()), app);
+        tm.update_progress(task_id, 100.0, Some("环境安装完成".into()), app);
         let _ = app.emit("restart-required", true);
+    } else {
+        tm.update_progress(task_id, 95.0, Some("部分组件安装完成".into()), app);
     }
 
     let _ = app.emit("environment-changed", true);
