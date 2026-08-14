@@ -39,7 +39,7 @@ uuid = { version = "1", features = ["v4"] }
 
 # Windows-specific
 [target.'cfg(windows)'.dependencies]
-keyring = "3"
+keyring = "4"
 winreg = "0.52"
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Environment"] }
 
