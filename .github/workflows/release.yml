@@ -39,10 +39,12 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # Tauri v2 Windows bundles are msi + nsis only; there is no native
+      # "portable" bundle. The portable artifact is the raw release binary.
       - name: Build
         run: |
           if ("${{ matrix.bundle }}" -eq "portable") {
-            npx tauri build --target x86_64-pc-windows-msvc --bundles nsis
+            npx tauri build --target x86_64-pc-windows-msvc --no-bundle
           } else {
             npx tauri build --target x86_64-pc-windows-msvc --bundles msi,nsis
           }
@@ -50,25 +52,36 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      # Portable: copy the raw release binary (target/release/*.exe) and
+      # rename it to -portable.exe.
       - name: Rename portable
         if: matrix.bundle == 'portable'
         shell: pwsh
         run: |
-          Move-Item src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe "${{ env.APP_NAME }}-x64-portable.exe" -Force
+          $exe = Get-ChildItem src-tauri/target/x86_64-pc-windows-msvc/release/*.exe |
+                 Select-Object -First 1
+          if (-not $exe) { throw "No release binary found" }
+          Copy-Item $exe.FullName "${{ env.APP_NAME }}-x64-portable.exe"
 
+      # Setup: copy the NSIS installer as -setup.exe and the MSI as -setup.msi
+      # (each keeps its own extension; the previous loop overwrote both into a
+      # single -setup.exe).
       - name: Rename setup
         if: matrix.bundle == 'setup'
         shell: pwsh
         run: |
-          Get-ChildItem src-tauri/target/x86_64-pc-windows-msvc/release/bundle/ -Recurse -Filter *.exe,*.msi | ForEach-Object {
-            $newName = $_.Name -replace '.*\.exe$', "${{ env.APP_NAME }}-x64-setup.exe"
+          $bundle = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle"
+          Get-ChildItem "$bundle/nsis" -Filter '*.exe' | ForEach-Object {
             Copy-Item $_.FullName "${{ env.APP_NAME }}-x64-setup.exe"
+          }
+          Get-ChildItem "$bundle/msi" -Filter '*.msi' | ForEach-Object {
+            Copy-Item $_.FullName "${{ env.APP_NAME }}-x64-setup.msi"
           }
 
       - name: Generate SHA-256
         shell: pwsh
         run: |
-          Get-ChildItem *.exe | ForEach-Object {
+          Get-ChildItem -Path '*.exe','*.msi' | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($_.Name)" | Out-File -Append "${{ env.APP_NAME }}-x64-SHA256.txt"
           }
@@ -79,6 +92,7 @@ jobs:
           name: build-x64-${{ matrix.bundle }}
           path: |
             *.exe
+            *.msi
             *.txt
           if-no-files-found: error
 
@@ -113,8 +127,9 @@ jobs:
           # Note: Requires Visual Studio with ARM64 build tools pre-installed on runner
           Write-Output "Building for ARM64..."
 
+      # ARM64 delivers a true portable exe (MSI ARM64 support is limited).
       - name: Build
-        run: npx tauri build --target aarch64-pc-windows-msvc --bundles nsis
+        run: npx tauri build --target aarch64-pc-windows-msvc --no-bundle
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -122,7 +137,10 @@ jobs:
       - name: Rename artifacts
         shell: pwsh
         run: |
-          Move-Item src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.exe "${{ env.APP_NAME }}-arm64-portable.exe" -Force
+          $exe = Get-ChildItem src-tauri/target/aarch64-pc-windows-msvc/release/*.exe |
+                 Select-Object -First 1
+          if (-not $exe) { throw "No release binary found" }
+          Copy-Item $exe.FullName "${{ env.APP_NAME }}-arm64-portable.exe"
           $hash = (Get-FileHash "${{ env.APP_NAME }}-arm64-portable.exe" -Algorithm SHA256).Hash.ToLower()
           "$hash  ${{ env.APP_NAME }}-arm64-portable.exe" | Out-File "${{ env.APP_NAME }}-arm64-SHA256.txt"
 
@@ -153,10 +171,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release-assets
-          Get-ChildItem artifacts -Recurse -Filter *.exe | ForEach-Object {
-            Copy-Item $_.FullName "release-assets/"
-          }
-          Get-ChildItem artifacts -Recurse -Filter *.txt | ForEach-Object {
+          Get-ChildItem artifacts -Recurse -Include '*.exe','*.msi','*.txt' | ForEach-Object {
             Copy-Item $_.FullName "release-assets/"
           }
 
@@ -178,6 +193,13 @@ jobs:
           if ($x64Setup) {
             $hash = (Get-FileHash "release-assets/$($x64Setup.Name)" -Algorithm SHA256).Hash.ToLower()
             $manifest.platforms['windows-x86_64'] = @{
+              # TODO(signing): "<signature-from-build>" is a hardcoded placeholder.
+              # A real Ed25519 signature (generated from the Tauri updater
+              # signing key) is required before enabling auto-update. The updater
+              # signing key lives in GitHub Secrets (TAURI_SIGNING_PRIVATE_KEY);
+              # emit the signature here via `npx tauri signer sign` or by enabling
+              # `createUpdaterArtifacts` in the build. Auto-update is currently
+              # deferred (see docs/adr/0001-auto-update-deferred.md).
               signature = "<signature-from-build>"
               url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($x64Setup.Name)"
               sha256 = $hash
@@ -187,6 +209,7 @@ jobs:
           if ($arm64Portable) {
             $hash = (Get-FileHash "release-assets/$($arm64Portable.Name)" -Algorithm SHA256).Hash.ToLower()
             $manifest.platforms['windows-aarch64'] = @{
+              # TODO(signing): placeholder signature — see note above.
               signature = "<signature-from-build>"
               url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($arm64Portable.Name)"
               sha256 = $hash

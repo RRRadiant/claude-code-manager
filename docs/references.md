@@ -173,6 +173,9 @@ Capabilities include: `batch`, `citations`, `code_execution`, `context_managemen
 3. Build: `tauri build --target aarch64-pc-windows-msvc --bundles nsis`
 
 ### Updater Plugin (`@tauri-apps/plugin-updater`)
+
+> ⚠️ 状态：**评估过，暂未接入**。当前版本不含该插件，接入计划见 `docs/adr/0001-auto-update-deferred.md`。以下为将来接入时的参考步骤。
+
 - Generate key pair: `npx tauri signer generate -w ~/.tauri/myapp.key`
 - Config: `createUpdaterArtifacts: true` in `tauri.conf.json`
 - Update manifest JSON per platform:
@@ -222,7 +225,7 @@ Capabilities include: `batch`, `citations`, `code_execution`, `context_managemen
 | `@liquid-ui/react` | latest | Full component suite (Card/Button/Input/Modal), physics-based |
 | `react-glass-rim` | 0.1.0 | Pure CSS rim light only, ~1.5 kB, edge highlight |
 
-**Recommendation:** `@creativoma/liquid-glass` for component-level glass effects + `react-glass-rim` for lightweight edge highlights, or `quidlass` for zero-dependency approach.
+**Recommendation:** `@creativoma/liquid-glass` for component-level glass effects（已采用；`react-glass-rim` 曾作为备选评估，当前未引入）。
 
 ---
 

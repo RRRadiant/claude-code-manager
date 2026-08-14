@@ -49,23 +49,22 @@ User Input (masked in UI)
 ### Capability-Based Access Control
 Tauri capabilities are defined in `src-tauri/capabilities/`. Each command must be explicitly allowed.
 
+当前真实内容（`src-tauri/capabilities/default.json`）：
+
 ```json
 {
+  "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
+  "description": "enables the default permissions",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "core:window:default",
-    "core:event:default",
-    "plugin:updater:default",
-    // Specific app commands, no wildcards:
-    "app:environment-detect",
-    "app:install-claude-code",
-    // NOT:
-    // "app:execute-command"  // <-- no generic shell command
+    "core:default"
   ]
 }
 ```
+
+> 当前仅授予 `core:default`，未启用 `plugin:updater`、`plugin:shell` 等额外权限，
+> 也不存在任意命令执行的通配权限。
 
 ### Command Input Validation
 Every IPC command validates:
@@ -144,6 +143,10 @@ let output = Command::new(&detected_node_path)
 
 ## 6. Log Sanitization
 
+> **状态：脱敏器已实现，但正在接线中。** `src-tauri/src/logging.rs` 中的 `LogSanitizer`
+> 已用正则实现 API Key / Token / 密码 / 邮箱 / 路径脱敏，但尚未全面接入所有日志
+> 输出路径（`log_sanitized!` 宏已定义、尚未在业务日志中统一调用）。
+
 ### Sanitization Rules
 | Pattern | Replacement |
 |---------|------------|
@@ -176,7 +179,11 @@ impl Sanitized {
 
 ## 7. Update Security
 
-### Verification Chain
+> **状态：自动更新尚未实现（计划中）。** 本节描述的是规划中的设计，当前版本
+> **没有**已实现的 Ed25519 签名验证、公钥内嵌或密钥轮换。详见
+> `docs/adr/0001-auto-update-deferred.md`。
+
+### Verification Chain（规划中）
 ```
 1. Download from GitHub Releases (HTTPS, TLS 1.3)
 2. Verify TLS certificate chain
@@ -187,7 +194,7 @@ impl Sanitized {
 7. Only then proceed with installation
 ```
 
-### Key Management
+### Key Management（规划中）
 - Signing private key stored in GitHub Secrets
 - Public key embedded in application binary
 - Key rotation supported via versioned public keys
@@ -196,6 +203,8 @@ impl Sanitized {
 ---
 
 ## 8. Audit Logging
+
+> **状态：审计日志子系统尚未实现（规划中）。** 下列清单为目标设计。
 
 Every sensitive operation is logged (sanitized):
 - API key create/update/delete (no key value)
@@ -206,21 +215,21 @@ Every sensitive operation is logged (sanitized):
 - Self-update attempts (success/failure)
 
 Audit logs are:
-- Stored in `%APPDATA%\ClaudeCodeManager\logs\audit*.log`
-- Rotated at 10MB
-- Retained for 30 days
-- Sanitized before writing
+- Stored in `%APPDATA%\ClaudeCodeManager\logs\audit*.log`（规划中）
+- Rotated at 10MB（规划中）
+- Retained for 30 days（规划中）
+- Sanitized before writing（规划中）
 
 ---
 
 ## 9. Dependency Supply Chain
 
-- All npm dependencies pinned with exact versions + integrity hashes
+- npm 依赖使用 semver range（`package.json`），实际安装版本与完整性哈希由
+  `package-lock.json` 锁定
 - Rust dependencies pinned in `Cargo.lock`
 - Automated Dependabot scanning (enabled in repo)
 - `npm audit` and `cargo audit` run in CI
 - SBOM generated for each release (CycloneDX format)
-- Third-party license check enforced in CI
 
 ---
 
@@ -233,10 +242,10 @@ Audit logs are:
 - [ ] Log sanitization tested (no keys leaked in error paths)
 - [ ] Path traversal tests pass
 - [ ] Atomic write race condition tests pass
-- [ ] Update signature verification tested (modified binary rejected)
+- [ ] Update signature verification tested (modified binary rejected)（规划中，自动更新尚未实现）
 - [ ] Admin rights not requested for normal operations
 - [ ] Frontend cannot read or write files directly
-- [ ] Audit logging enabled and verified
+- [ ] Audit logging enabled and verified（规划中）
 - [ ] Dependency audit clean (`npm audit`, `cargo audit`)
 - [ ] SBOM generated
 - [ ] Code signing certificate applied

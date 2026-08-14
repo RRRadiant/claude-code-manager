@@ -4,8 +4,10 @@
 
 如果你发现安全漏洞，**请不要创建公开 Issue**。请通过以下方式报告：
 
-1. 发送邮件至 [维护者邮箱]
-2. 或使用 GitHub 的 Security Advisory 功能
+1. 通过 GitHub 的 Security Advisory 功能报告（推荐）
+2. 或使用仓库的 Security 页（Security → Report a vulnerability）
+
+> 本仓库暂无公开联系邮箱，请优先通过 GitHub Security Advisory 私密报告。
 
 我们会在 48 小时内回复，并尽快修复。
 

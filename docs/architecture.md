@@ -28,13 +28,13 @@
 | Frontend framework | **React 18** | Component model, ecosystem, developer tooling |
 | Frontend language | **TypeScript** | Type safety, better DX for complex state |
 | Build tool | **Vite** | Fast HMR, TypeScript native, Tauri integration |
-| UI effects | **@creativoma/liquid-glass** + **react-glass-rim** | Liquid glass for navigation/cards, rim light for edge effects |
+| UI effects | **@creativoma/liquid-glass** | Liquid glass for navigation/cards |
 | State management | **Zustand** | Lightweight, TypeScript-first, simple API |
 | Styling | **CSS Modules + CSS custom properties** | Theming via CSS variables, no runtime CSS-in-JS overhead |
 | Credential storage | **keyring** crate (Rust) | Windows Credential Manager backend |
 | CI/CD | **GitHub Actions** | Native Tauri support, Windows ARM64/x64 runners |
 | Packaging | **Tauri bundler (NSIS)** | x64 and ARM64 support |
-| Updates | **@tauri-apps/plugin-updater** | Built-in, signature-verified, GitHub Releases source |
+| Updates | **@tauri-apps/plugin-updater（规划中，暂缓）** | 自动更新尚未接入，见 `docs/adr/0001-auto-update-deferred.md` |
 
 ### Why Not...
 | Alternative | Reason against |

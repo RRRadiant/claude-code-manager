@@ -24,15 +24,15 @@
 ## 项目结构
 
 ```
-D:\桌面\NewCC/
+D:\桌面\软件\NewCC/
 ├── src/                    # React 前端
 │   ├── pages/              # 9 个页面
-│   ├── components/         # Sidebar, StatusBar, Onboarding
+│   ├── components/         # 共享 UI 组件（含 glass/ 玻璃拟态组件）
 │   ├── services/tauri.ts   # IPC 封装
 │   ├── stores/             # Zustand stores
 │   └── types/index.ts      # TS 类型定义
-├── src-tauri/src/          # Rust 后端 (17 模块)
-│   ├── commands/           # 7 命令文件
+├── src-tauri/src/          # Rust 后端（15 个模块 + main.rs 入口）
+│   ├── commands/           # Tauri 命令处理器（8 文件）
 │   ├── installer.rs        # 安装/卸载
 │   ├── impl_providers.rs   # Provider 适配器
 │   ├── mcp.rs              # MCP 测试引擎
@@ -48,34 +48,36 @@ D:\桌面\NewCC/
 | TypeScript 编译 | ✅ 通过 |
 | Vite 构建 | ✅ 通过 (88ms) |
 | Rust 编译 | ✅ 0 错误 |
-| Rust 测试 | ✅ **132/132 通过** |
+| Rust 测试 | ✅ **89/89 通过** |
 | Git 仓库 | ✅ 已初始化 (commit 907dcea) |
 
 ## Rust 模块清单
 
 | 模块 | 文件 | 功能 |
 |------|------|------|
-| `commands/` | 7 文件 | Tauri IPC 命令 (16 个命令) |
+| `commands/` | 8 文件 | Tauri IPC 命令 (30 个命令) |
 | `error` | error.rs | `AppError` 统一错误码 (30+) |
 | `task` | task.rs | 任务系统 (进度/取消/事件) |
 | `logging` | logging.rs | 日志脱敏 (API Key/Token/密码) |
 | `security` | security.rs | 路径验证/Shell校验/权限检查 |
 | `process` | process.rs | 安全命令执行 (超时/取消) |
 | `environment` | environment.rs | Windows/PS/Git/WebView2检测 |
+| `env_refresh` | env_refresh.rs | 环境变量刷新（PATH 变更后重载） |
 | `config` | config.rs | 配置读取/原子写入/备份 |
 | `credentials` | credentials.rs | Windows Credential Manager |
 | `installer` | installer.rs | Claude Code 安装/卸载 |
-| `impl_providers` | impl_providers.rs | Anthropic/DeepSeek/Custom 适配器 |
+| `impl_providers` | impl_providers.rs | Anthropic/DeepSeek/Custom 适配器（含模型检测） |
 | `mcp` | mcp.rs | MCP 测试 (stdio/HTTP 握手) |
-| `model_detection` | model_detection.rs | 模型检测 (stub) |
 | `providers` | providers.rs | ProviderAdapter trait + 类型 |
-| `diagnostics` | diagnostics.rs | 8 项系统诊断检查 |
+| `diagnostics` | diagnostics.rs | 系统诊断检查 |
 
-## Tauri 命令列表 (16 个)
+## Tauri 命令列表 (30 个)
 
 ```
 detect_environment        环境检测
 check_path                PATH 检查
+refresh_environment       刷新环境变量
+detect_node_detailed      检测 Node.js 详情
 get_tasks                 任务列表
 cancel_task               取消任务
 clear_tasks               清除已完成
@@ -85,11 +87,23 @@ read_config_file          读取配置
 write_config_file         写入配置
 test_provider_connection  测试 Provider 连接
 detect_provider_models    检测模型
+save_provider_credential  保存 Provider 凭据
+get_provider_credential   读取 Provider 凭据
+delete_provider_credential 删除 Provider 凭据
+save_provider_config      保存 Provider 配置
+load_provider_config      读取 Provider 配置
 list_mcp_servers          列出 MCP Server
 test_mcp_server           测试 MCP 连接
+update_mcp_server         更新 MCP Server
+delete_mcp_server         删除 MCP Server
 test_raw_mcp_stdio        测试原始 MCP Stdio
+generate_install_plan     生成安装计划
+detect_node_js            检测 Node.js
+run_claude                运行 Claude Code
 install_claude_code       安装 Claude Code
+install_full_environment  安装完整环境
 uninstall_claude_code     卸载 Claude Code
+restart_app               重启应用
 ```
 
 ## 前端页面 (9 个)
@@ -102,7 +116,7 @@ uninstall_claude_code     卸载 Claude Code
 | 配置文件 | `#config` | JSON 编辑器 (源码/表单模式) |
 | MCP 管理 | `#mcp` | MCP Server 增删改查 + 测试 |
 | 故障诊断 | `#diagnostics` | 一键诊断 + 结果展示 |
-| 软件更新 | `#updates` | Claude Code + CCM 双更新 |
+| 软件更新 | `#updates` | Claude Code 更新（CCM 自身自动更新计划中） |
 | 设置 | `#settings` | 主题/动画/布局配置 |
 | 关于 | `#about` | 版本/技术栈/链接 |
 
@@ -113,14 +127,14 @@ uninstall_claude_code     卸载 Claude Code
 
 可通过 `stores/appStore.ts` 中的 `onboardingCompleted` 控制。
 
-## 测试覆盖 (132 个)
+## 测试覆盖 (89 个)
 
 | 模块 | 测试数 | 覆盖内容 |
 |------|--------|---------|
-| `security` | 34 | 路径验证/shell校验/MCP命令/提权 |
-| `updater` | 30 | 版本比较/通道/状态/清单序列化 |
-| `environment` | 22 | Windows检测/PS/Git/WebView2/序列化 |
-| `process` | 23 | CommandSpec/命令执行/超时/取消 |
+| `security` | 38 | 路径验证/shell校验/MCP命令/提权 |
+| `environment` | 27 | Windows检测/PS/Git/WebView2/序列化 |
+| `env_refresh` | 8 | 环境变量刷新 |
+| `process` | 5 | CommandSpec/命令执行/超时/取消 |
 | `logging` | 6 | API Key脱敏/路径脱敏/边界 |
 | `config` | 3 | 作用域解析/写入校验 |
 | `credentials` | 1 | 凭据ID格式 |
@@ -139,12 +153,12 @@ uninstall_claude_code     卸载 Claude Code
 
 ## 下一步工作
 
-1. **构建安装包** — `npx tauri build --bundles nsis` (后台运行中)
+1. **构建安装包** — `npx tauri build --bundles nsis`
 2. **本地预览** — `npm run tauri dev`
 3. **清理警告** — 81 个 Rust warnings (多为未使用的骨架代码)
 4. **补充集成测试** — 当前为纯单元测试
 5. **添加前端测试** — Vitest 配置已就绪但尚无测试
-6. **集成 liquid-glass** — 包已安装，需在组件中导入使用
+6. ~~集成 liquid-glass~~ — 已完成，玻璃拟态组件已广泛使用（`src/components/glass/`）
 7. **完善 Provider 功能** — apply_config/remove_config 已实现但未完全测试
 8. **完善 MCP 编辑** — 新增/编辑/删除功能需要前端对接后端
 

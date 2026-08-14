@@ -26,6 +26,7 @@
 - 📝 **配置文件管理** — 可视化编辑 settings.json、CLAUDE.md、.mcp.json
 - 🔗 **MCP 管理** — 编辑、测试 MCP Server
 - 🩺 **故障诊断** — 一键诊断常见问题
+- 🔄 **自动更新（计划中）** — 应用自身自动更新尚未接入，请手动关注 Releases 获取新版本
 
 ## 系统要求
 
@@ -78,32 +79,36 @@ npx tauri build --target aarch64-pc-windows-msvc --bundles nsis
 
 - **API Key 安全存储** — 所有 API Key 通过 Windows Credential Manager 加密存储，前端仅显示掩码
 - **命令隔离** — 前端不能直接执行系统命令，所有操作经过 Rust 后端安全处理
-- **MCP 安全校验** — MCP 命令与配置路径经安全模块校验，防止命令注入与路径穿越
+- **MCP 测试命令白名单校验** — MCP 测试命令与参数在 spawn 前经安全校验（拒绝 shell 元字符与路径穿越），仅放行合法命令，防止命令注入
 - **日志脱敏** — 日志模块提供 API Key、Token、密码等敏感信息脱敏能力
 
 ## 项目结构
 
 ```
 src/                  # React 前端
-  components/         # 共享 UI 组件
-  pages/              # 页面组件
-  features/           # 功能模块
+  components/         # 共享 UI 组件（含 glass/ 玻璃拟态组件）
+  pages/              # 页面组件（Home/Environment/Providers/Config/Mcp/Diagnostics/Updates/Settings/About）
   stores/             # Zustand 状态管理
-  services/           # Tauri IPC 封装
+  services/           # Tauri IPC 封装（tauri.ts）
   types/              # TypeScript 类型定义
 
 src-tauri/src/        # Rust 后端
-  commands/           # Tauri 命令处理
-  environment/        # 系统环境检测
-  installer/          # Claude Code 安装
-  providers/          # API 服务商适配器
-  config/             # 配置文件管理
-  mcp/                # MCP 管理
-  credentials/        # 凭据安全存储
-  diagnostics/        # 故障诊断
-  updater/            # 更新系统
-  security/           # 安全校验
-  logging/            # 日志脱敏
+  commands/           # Tauri 命令处理器（子目录：config/diagnostics/environment/installer/mcp/providers/task）
+  config.rs           # 配置读取/原子写入/备份
+  credentials.rs      # Windows Credential Manager 凭据存储
+  diagnostics.rs      # 系统诊断
+  env_refresh.rs      # 环境变量刷新
+  environment.rs      # 系统环境检测
+  error.rs            # 统一错误类型 AppError
+  impl_providers.rs   # Provider 适配器实现（Anthropic/DeepSeek/Custom）
+  installer.rs        # Claude Code 安装/卸载
+  logging.rs          # 日志脱敏
+  mcp.rs              # MCP 管理/测试
+  process.rs          # 安全命令执行
+  providers.rs        # ProviderAdapter trait + 类型
+  security.rs         # 路径校验 / Shell 校验 / 权限检查
+  task.rs             # 任务系统（进度/取消/事件）
+  lib.rs / main.rs    # 应用入口与命令注册
 ```
 
 ## 许可证
