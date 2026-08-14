@@ -49,14 +49,18 @@ pub fn sanitize_path(
     let canonical = canonicalize_deepest(&path)?;
 
     // Verify the resolved path is within allowed roots or is an allowed file.
+    // Both sides go through `canonicalize_deepest` so comparisons are symmetric:
+    // a canonicalized path must never be compared against a raw lexical path,
+    // or any junction/redirected parent (e.g. CI runner temp/profile dirs)
+    // makes them disagree.
     let has_restriction = !allowed_roots.is_empty() || !allowed_files.is_empty();
     if has_restriction {
         let in_allowed_root = allowed_roots.iter().any(|root| {
-            let root_canon = canonicalize_loose(root);
+            let root_canon = canonicalize_deepest(root).unwrap_or_else(|_| root.to_path_buf());
             is_within(&canonical, &root_canon)
         });
         let is_allowed_file = allowed_files.iter().any(|file| {
-            let file_canon = canonicalize_loose(file);
+            let file_canon = canonicalize_deepest(file).unwrap_or_else(|_| file.to_path_buf());
             is_same_path(&canonical, &file_canon)
         });
         if !in_allowed_root && !is_allowed_file {
@@ -127,11 +131,6 @@ fn canonicalize_deepest(path: &Path) -> Result<PathBuf, AppError> {
         }
     }
     Ok(result)
-}
-
-/// Canonicalize when possible, otherwise fall back to the literal path.
-fn canonicalize_loose(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Case-insensitive (Windows) normalized string form of a path.
@@ -482,10 +481,7 @@ mod tests {
         let file = dir.join("config.json");
         let result = sanitize_path(&file.to_string_lossy(), &[], &[file.as_path()]);
         std::fs::remove_dir_all(&dir).ok();
-        assert!(
-            result.is_ok(),
-            "allow-listed file should pass: {result:?}"
-        );
+        assert!(result.is_ok(), "allow-listed file should pass: {result:?}");
     }
 
     #[test]
