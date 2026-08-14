@@ -1,4 +1,4 @@
-import { type ReactNode, type CSSProperties, useEffect } from 'react'
+import { type ReactNode, type CSSProperties, useEffect, useRef } from 'react'
 import { LiquidGlass } from '@creativoma/liquid-glass'
 
 interface GlassModalProps {
@@ -20,6 +20,8 @@ export function GlassModal({
   style,
   backdropBlur = 8,
 }: GlassModalProps) {
+  const wrapperRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -27,6 +29,7 @@ export function GlassModal({
     if (open) {
       document.addEventListener('keydown', handleEsc)
       document.body.style.overflow = 'hidden'
+      wrapperRef.current?.focus()
     }
     return () => {
       document.removeEventListener('keydown', handleEsc)
@@ -38,6 +41,11 @@ export function GlassModal({
 
   return (
     <div
+      ref={wrapperRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title ?? '对话框'}
+      tabIndex={-1}
       style={{
         position: 'fixed',
         inset: 0,
@@ -47,13 +55,14 @@ export function GlassModal({
         justifyContent: 'center',
         background: 'rgba(0, 0, 0, 0.4)',
         backdropFilter: 'blur(4px)',
+        outline: 'none',
       }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
       <LiquidGlass
         backdropBlur={backdropBlur}
         tintColor="rgba(255, 255, 255, 0.15)"
-        className={`rounded-2xl border border-white/10 shadow-2xl ${className}`}
+        className={`liquid-glass rounded-2xl border border-white/10 shadow-2xl ${className}`}
         style={{
           minWidth: '400px',
           maxWidth: '90vw',
@@ -72,6 +81,8 @@ export function GlassModal({
           }}>
             <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 600 }}>{title}</h2>
             <button
+              type="button"
+              aria-label="关闭"
               onClick={onClose}
               style={{
                 background: 'none',

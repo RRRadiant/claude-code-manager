@@ -16,6 +16,7 @@ export function GlassSidebar({
       as="nav"
       backdropBlur={10}
       tintColor="rgba(255,255,255,0.05)"
+      className="liquid-glass"
       style={{
         width: collapsed ? collapsedWidth : width,
         height: '100%',

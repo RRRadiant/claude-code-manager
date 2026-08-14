@@ -1,12 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useEnvironmentStore } from '../stores/environmentStore'
 import { GlassCard } from '../components/glass'
 import * as api from '../services/tauri'
 
 export default function HomePage() {
-  const { status, detect } = useEnvironmentStore()
+  const status = useEnvironmentStore((s) => s.status)
+  const detect = useEnvironmentStore((s) => s.detect)
   const [launching, setLaunching] = useState(false)
   const [launchMsg, setLaunchMsg] = useState<string | null>(null)
+  const launchMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (launchMsgTimer.current) clearTimeout(launchMsgTimer.current)
+  }, [])
 
   const handleRunClaude = async () => {
     setLaunching(true)
@@ -14,7 +20,7 @@ export default function HomePage() {
     try {
       const msg = await api.runClaude()
       setLaunchMsg(msg)
-      setTimeout(() => setLaunchMsg(null), 5000)
+      launchMsgTimer.current = setTimeout(() => setLaunchMsg(null), 5000)
     } catch (e) {
       setLaunchMsg(api.errorMessage(e))
     } finally {

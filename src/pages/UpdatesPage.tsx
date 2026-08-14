@@ -1,12 +1,9 @@
 import { useEnvironmentStore } from '../stores/environmentStore'
 import { GlassCard } from '../components/glass'
-
-// Application version — single source would be ideal (build-time injection),
-// but for now we keep it in sync with package.json / Cargo.toml / tauri.conf.json.
-const APP_VERSION = 'v0.1.0'
+import { APP_VERSION } from '../constants'
 
 export default function UpdatesPage() {
-  const { status } = useEnvironmentStore()
+  const status = useEnvironmentStore((s) => s.status)
 
   return (
     <div className="page">

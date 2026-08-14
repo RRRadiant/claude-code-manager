@@ -1,4 +1,5 @@
 import { GlassCard } from '../components/glass'
+import { APP_VERSION } from '../constants'
 
 export default function AboutPage() {
   return (
@@ -29,7 +30,7 @@ export default function AboutPage() {
           </div>
 
           <div style={{ position: 'relative', zIndex: 1 }}>
-            <p className="text-tertiary" style={{ fontSize: 'var(--text-md)', marginBottom: 'var(--s4)' }}>v0.1.0</p>
+            <p className="text-tertiary" style={{ fontSize: 'var(--text-md)', marginBottom: 'var(--s4)' }}>{APP_VERSION}</p>
 
             <p style={{
               color: 'var(--text-secondary)', fontSize: 'var(--text-sm)',

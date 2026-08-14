@@ -1,9 +1,17 @@
+import { useShallow } from 'zustand/react/shallow'
 import { useEnvironmentStore } from '../stores/environmentStore'
 import { useConsoleStore } from '../stores/consoleStore'
 
 export default function StatusBar() {
-  const { status } = useEnvironmentStore()
-  const { activeTask, expanded, toggle, entries } = useConsoleStore()
+  const status = useEnvironmentStore((s) => s.status)
+  const { activeTask, expanded, toggle, entries } = useConsoleStore(
+    useShallow((s) => ({
+      activeTask: s.activeTask,
+      expanded: s.expanded,
+      toggle: s.toggle,
+      entries: s.entries,
+    })),
+  )
   const ok = !!status?.claude_code.installed
 
   return (
@@ -52,6 +60,7 @@ export default function StatusBar() {
         <button
           onClick={toggle}
           title="执行记录"
+          aria-label={expanded ? '收起执行记录' : '展开执行记录'}
           style={{
             background: 'none', border: 'none', cursor: 'pointer',
             color: expanded ? 'var(--accent)' : 'var(--text-tertiary)',

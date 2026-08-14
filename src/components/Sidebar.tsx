@@ -21,7 +21,8 @@ const Icon = ({ d }: { d: string }) => (
 )
 
 export default function Sidebar({ currentPage }: { currentPage?: string }) {
-  const { sidebarCollapsed, toggleSidebar } = useAppStore()
+  const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar)
 
   return (
     <GlassSidebar collapsed={sidebarCollapsed} width={220} collapsedWidth={56}>
@@ -38,7 +39,7 @@ export default function Sidebar({ currentPage }: { currentPage?: string }) {
             />
           </div>
         )}
-        <button className="sidebar-toggle" onClick={toggleSidebar}>
+        <button className="sidebar-toggle" onClick={toggleSidebar} aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}>
           {sidebarCollapsed ? (
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
           ) : (

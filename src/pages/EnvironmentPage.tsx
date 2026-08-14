@@ -6,17 +6,21 @@ import * as api from '../services/tauri'
 import { GlassCard } from '../components/glass'
 
 export default function EnvironmentPage() {
-  const { status, loading, detect } = useEnvironmentStore()
-  const { activeTask } = useConsoleStore()
+  const status = useEnvironmentStore((s) => s.status)
+  const loading = useEnvironmentStore((s) => s.loading)
+  const detect = useEnvironmentStore((s) => s.detect)
+  const activeTask = useConsoleStore((s) => s.activeTask)
   const [plan, setPlan] = useState<InstallStepResult[] | null>(null)
   const [planLoading, setPlanLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => { detect() }, [])
+  useEffect(() => { detect() }, [detect])
 
   const loadPlan = async () => {
     setPlanLoading(true)
+    setError(null)
     try { setPlan(await api.generateInstallPlan()) }
-    catch { /* ignore */ }
+    catch (e) { setError(api.errorMessage(e)) }
     finally { setPlanLoading(false) }
   }
 
@@ -35,6 +39,8 @@ export default function EnvironmentPage() {
           </button>
         </div>
       </div>
+
+      {error && <div className="alert" style={{ marginBottom: 'var(--s2)' }}>{error}</div>}
 
       {/* Real-time progress bar (Plan 1: EnvironmentPage progress) */}
       {activeTask && activeTask.status === 'running' && (
@@ -87,9 +93,9 @@ export default function EnvironmentPage() {
                       disabled={activeTask?.status === 'running'}
                       onClick={() => {
                         if (item.component === 'Claude Code')
-                          api.installClaudeCode().catch(() => {})
+                          api.installClaudeCode().catch(e => setError(api.errorMessage(e)))
                         else
-                          api.installFullEnvironment().catch(() => {})
+                          api.installFullEnvironment().catch(e => setError(api.errorMessage(e)))
                       }}
                     >
                       安装

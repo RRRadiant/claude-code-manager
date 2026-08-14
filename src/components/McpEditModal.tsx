@@ -33,9 +33,8 @@ export default function McpEditModal({ server, onClose, onSaved }: Props) {
     setArgsText((server.args ?? []).join('\n'))
     setUrl(server.url ?? '')
     setTimeout_((server.timeout_ms ?? 60000) / 1000)
-    // Parse env from the original source — we show a simplified version
-    // Since env isn't parsed from source yet, start empty
-    setEnvEntries([])
+    // Preserve existing env vars when editing a server instead of resetting them.
+    setEnvEntries((server.env ?? []).map(e => ({ key: e.key, value: e.value })))
     setError('')
   }, [server])
 

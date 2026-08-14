@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { McpServerDef, McpTestResult } from '../types'
-import { listMcpServers, testMcpServer } from '../services/tauri'
+import { listMcpServers, testMcpServer, errorMessage } from '../services/tauri'
 import { GlassCard } from '../components/glass'
 import McpEditModal from '../components/McpEditModal'
 
@@ -23,13 +23,19 @@ export default function McpPage() {
   const [testing, setTesting] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ name: string; result: McpTestResult } | null>(null)
   const [editServer, setEditServer] = useState<McpServerDef | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => { reload() }, [])
 
   const reload = async () => {
     setLoading(true)
     setTestResult(null)
-    try { setServers(await listMcpServers()) } catch { /* noop */ }
+    try {
+      setServers(await listMcpServers())
+      setLoadError(null)
+    } catch (e) {
+      setLoadError(errorMessage(e))
+    }
     finally { setLoading(false) }
   }
 
@@ -39,8 +45,8 @@ export default function McpPage() {
     try {
       const r = await testMcpServer(name)
       setTestResult({ name, result: r })
-    } catch {
-      setTestResult({ name, result: { success: false, protocol_version: null, server_name: null, server_version: null, tool_count: null, tool_names: [], response_time_ms: 0, stdout_summary: null, stderr_summary: null, suggestions: ['测试请求失败'] } })
+    } catch (e) {
+      setTestResult({ name, result: { success: false, protocol_version: null, server_name: null, server_version: null, tool_count: null, tool_names: [], response_time_ms: 0, stdout_summary: null, stderr_summary: null, suggestions: [errorMessage(e)] } })
     }
     finally { setTesting(null) }
   }
@@ -56,6 +62,8 @@ export default function McpPage() {
           {loading ? '加载中...' : '刷新'}
         </button>
       </div>
+
+      {loadError && <div className="alert" style={{ marginBottom: 'var(--s2)' }}>{loadError}</div>}
 
       {servers.length === 0 && !loading ? (
         <GlassCard blur={6} tint="rgba(255,255,255,0.05)"
@@ -114,7 +122,7 @@ export default function McpPage() {
               </div>
               <code style={{ fontSize: 'var(--text-xs)', wordBreak: 'break-all' }}>
                 {s.command && `$ ${s.command} ${s.args?.join(' ') || ''}`}
-                {s.url && s.url}
+                {s.url}
               </code>
 
               {/* Test result */}

@@ -127,6 +127,18 @@ export interface ProviderConfig {
   custom_headers: [string, string][] | null;
 }
 
+/** Persisted provider config shape returned by `load_provider_config`. */
+export interface ProviderConfigDraft {
+  provider_type: ProviderType;
+  name: string;
+  base_url: string | null;
+  default_model: string | null;
+  fast_model: string | null;
+  high_capability_model: string | null;
+  timeout_secs: number | null;
+  custom_headers: string | null;
+}
+
 export interface ModelInfo {
   id: string;
   display_name: string | null;
@@ -157,7 +169,7 @@ export type ConfigScope = 'user' | 'project' | 'local' | 'managed';
 
 export interface ConfigFileInfo {
   name: string;
-  scope: string;
+  scope: ConfigScope;
   path: string;
   exists: boolean;
   last_modified: string | null;

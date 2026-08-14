@@ -15,7 +15,6 @@ interface AppState {
 
   // UI state
   sidebarCollapsed: boolean;
-  tweaksPanelOpen: boolean;
   reducedMotion: boolean;
   reducedGlass: boolean;
 
@@ -24,7 +23,6 @@ interface AppState {
   setOnboardingCompleted: (completed: boolean) => void;
   setOnboardingStep: (step: number) => void;
   toggleSidebar: () => void;
-  toggleTweaks: () => void;
   setReducedMotion: (value: boolean) => void;
   setReducedGlass: (value: boolean) => void;
 }
@@ -46,38 +44,59 @@ export const useAppStore = create<AppState>()(
       onboardingStep: 0,
 
       sidebarCollapsed: false,
-      tweaksPanelOpen: false,
       reducedMotion: false,
       reducedGlass: false,
 
       setTheme: (theme) => {
         const effectiveTheme = theme === 'system' ? getSystemTheme() : theme;
         set({ theme, effectiveTheme });
-        document.documentElement.setAttribute('data-theme', effectiveTheme);
       },
 
       setOnboardingCompleted: (completed) => set({ onboardingCompleted: completed }),
       setOnboardingStep: (step) => set({ onboardingStep: step }),
 
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
-      toggleTweaks: () => set((s) => ({ tweaksPanelOpen: !s.tweaksPanelOpen })),
 
       setReducedMotion: (value) => set({ reducedMotion: value }),
       setReducedGlass: (value) => set({ reducedGlass: value }),
     }),
     {
       name: 'ccm-app',
-      // Persist user preferences only; transient UI state (tweaksPanelOpen)
-      // is intentionally excluded so it resets each launch.
+      // Persist user preferences only; effectiveTheme is derived from `theme`
+      // and the current system preference, so it is intentionally not persisted.
       partialize: (state) => ({
         theme: state.theme,
-        effectiveTheme: state.effectiveTheme,
         onboardingCompleted: state.onboardingCompleted,
         onboardingStep: state.onboardingStep,
         sidebarCollapsed: state.sidebarCollapsed,
         reducedMotion: state.reducedMotion,
         reducedGlass: state.reducedGlass,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<AppState>;
+        const theme = persisted.theme ?? currentState.theme;
+        return {
+          ...currentState,
+          theme,
+          onboardingCompleted: persisted.onboardingCompleted ?? currentState.onboardingCompleted,
+          onboardingStep: persisted.onboardingStep ?? currentState.onboardingStep,
+          sidebarCollapsed: persisted.sidebarCollapsed ?? currentState.sidebarCollapsed,
+          reducedMotion: persisted.reducedMotion ?? currentState.reducedMotion,
+          reducedGlass: persisted.reducedGlass ?? currentState.reducedGlass,
+          effectiveTheme: theme === 'system' ? getSystemTheme() : theme,
+        };
+      },
     },
   ),
 );
+
+// Keep effectiveTheme in sync with the OS when the user chose "system".
+if (typeof window !== 'undefined' && window.matchMedia) {
+  const mql = window.matchMedia('(prefers-color-scheme: dark)');
+  mql.addEventListener('change', () => {
+    const { theme } = useAppStore.getState();
+    if (theme === 'system') {
+      useAppStore.setState({ effectiveTheme: getSystemTheme() });
+    }
+  });
+}

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../stores/appStore'
 import { useEnvironmentStore } from '../stores/environmentStore'
 
@@ -13,11 +13,25 @@ const STEPS = [
 ] as const
 
 export default function Onboarding() {
-  const { setOnboardingCompleted, setOnboardingStep, onboardingStep } = useAppStore()
-  const { detect } = useEnvironmentStore()
+  const setOnboardingCompleted = useAppStore((s) => s.setOnboardingCompleted)
+  const setOnboardingStep = useAppStore((s) => s.setOnboardingStep)
+  const onboardingStep = useAppStore((s) => s.onboardingStep)
+  const detect = useEnvironmentStore((s) => s.detect)
   const [step, setStep] = useState(onboardingStep)
   const [busy, setBusy] = useState(false)
+  const dialogRef = useRef<HTMLDivElement>(null)
   const current = STEPS[step]!
+
+  const close = () => setOnboardingCompleted(true)
+
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOnboardingCompleted(true)
+    }
+    document.addEventListener('keydown', handleEsc)
+    dialogRef.current?.focus()
+    return () => document.removeEventListener('keydown', handleEsc)
+  }, [setOnboardingCompleted])
 
   const goNext = () => {
     if (step < STEPS.length - 1) {
@@ -25,7 +39,7 @@ export default function Onboarding() {
       setStep(nextStep)
       setOnboardingStep(nextStep)
     } else {
-      setOnboardingCompleted(true)
+      close()
     }
   }
 
@@ -41,19 +55,19 @@ export default function Onboarding() {
         // 安装 — navigate to environment page for the user to trigger install
         // (install is long-running + may require restart; the env page has the button + progress)
         window.location.hash = 'environment'
-        setOnboardingCompleted(true)
+        close()
       } else if (step === 3) {
         // 配置 API — navigate to providers page
         window.location.hash = 'providers'
-        setOnboardingCompleted(true)
+        close()
       } else if (step === 4) {
         // 检测模型 — providers page has the "检测模型" button
         window.location.hash = 'providers'
-        setOnboardingCompleted(true)
+        close()
       } else if (step === 5) {
         // MCP — navigate to mcp page
         window.location.hash = 'mcp'
-        setOnboardingCompleted(true)
+        close()
       } else {
         goNext()
       }
@@ -63,16 +77,24 @@ export default function Onboarding() {
   }
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 100,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)',
-    }}>
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="初始配置向导"
+      tabIndex={-1}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 100,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)',
+        outline: 'none',
+      }}
+    >
       <div className="glass" style={{
         width: '90%', maxWidth: 440, textAlign: 'center',
         padding: '48px 40px', borderRadius: 'var(--r4)', position: 'relative',
       }}>
-        <button onClick={() => setOnboardingCompleted(true)} style={{
+        <button onClick={close} aria-label="关闭向导" style={{
           position: 'absolute', top: 16, right: 16,
           width: 32, height: 32, borderRadius: 'var(--r-pill)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -107,7 +129,7 @@ export default function Onboarding() {
               {busy ? '处理中...' : current.action}
             </button>
           )}
-          <button className="btn btn-ghost" onClick={() => setOnboardingCompleted(true)}>跳过向导</button>
+          <button className="btn btn-ghost" onClick={close}>跳过向导</button>
         </div>
       </div>
     </div>

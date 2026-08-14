@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import type { ModelInfo, ProviderConfigDraft } from '../types'
 import { GlassCard } from '../components/glass'
 import * as api from '../services/tauri'
 
@@ -90,7 +91,7 @@ function ProviderForm({ providerType, title, fields }: { providerType: ProviderK
   const [values, setValues] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState<Record<string, boolean>>({})
   const [results, setResults] = useState<Record<string, { success: boolean; message: string } | null>>({})
-  const [models, setModels] = useState<any[] | null>(null)
+  const [models, setModels] = useState<ModelInfo[] | null>(null)
   const [modelsLoading, setModelsLoading] = useState(false)
   const [initDone, setInitDone] = useState(false)
   const [existingKeyMask, setExistingKeyMask] = useState<string | null>(null)
@@ -105,7 +106,7 @@ function ProviderForm({ providerType, title, fields }: { providerType: ProviderK
 
     Promise.all([
       api.getProviderCredential(providerType).catch(() => ({ exists: false, masked: null, api_key: null })),
-      api.loadProviderConfig(providerType).catch(() => ({})),
+      api.loadProviderConfig(providerType).catch<Partial<ProviderConfigDraft>>(() => ({})),
     ]).then(([cred, cfg]) => {
       const merged = { ...init }
       // SECURITY: do NOT load the real API key into the form.
@@ -123,7 +124,7 @@ function ProviderForm({ providerType, title, fields }: { providerType: ProviderK
       setValues(merged)
       setInitDone(true)
     })
-  }, [providerType])
+  }, [providerType, fields])
 
   const setVal = (key: string, val: string) => setValues(prev => ({ ...prev, [key]: val }))
 
@@ -261,26 +262,34 @@ function ProviderForm({ providerType, title, fields }: { providerType: ProviderK
             可用模型 ({models.length}) — 点击选择
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 240, overflow: 'auto' }}>
-            {models.map((m, i) => {
-              const modelId = m.id || m.name || m.model || String(m)
-              const displayName = m.display_name || m.displayName || ''
+            {models.map((m) => {
+              const modelId = m.id
+              const displayName = m.display_name ?? ''
               const isDefault = values['default_model'] === modelId
               const isFast = values['fast_model'] === modelId
               const isHighCap = values['high_capability_model'] === modelId
 
               return (
-                <div key={i} style={{
+                <div key={m.id} style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                   padding: '6px var(--s1)', borderRadius: 'var(--r1)',
                   background: isDefault ? 'rgba(10,132,255,0.1)' : 'rgba(255,255,255,0.03)',
                   border: isDefault ? '1px solid rgba(10,132,255,0.2)' : '1px solid transparent',
-                  cursor: 'pointer', transition: 'background 0.15s',
+                  transition: 'background 0.15s',
                 }}
-                  onClick={() => setVal('default_model', modelId)}
                   onMouseEnter={e => { if (!isDefault) e.currentTarget.style.background = 'rgba(255,255,255,0.07)' }}
                   onMouseLeave={e => { if (!isDefault) e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s1)', minWidth: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() => setVal('default_model', modelId)}
+                    aria-label={`选择模型 ${modelId}`}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 'var(--s1)', minWidth: 0,
+                      flex: 1, background: 'none', border: 'none', padding: 0,
+                      cursor: 'pointer', textAlign: 'left', color: 'inherit',
+                    }}
+                  >
                     <span style={{
                       fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)',
                       color: isDefault ? 'var(--accent)' : 'var(--text-secondary)',
@@ -291,21 +300,23 @@ function ProviderForm({ providerType, title, fields }: { providerType: ProviderK
                         {displayName}
                       </span>
                     )}
-                  </div>
+                  </button>
                   <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
                     {isDefault && <span className="tag" style={{ fontSize: 10, padding: '1px 4px' }}>默认</span>}
                     {isFast && <span className="tag" style={{ fontSize: 10, padding: '1px 4px' }}>快速</span>}
                     {isHighCap && <span className="tag" style={{ fontSize: 10, padding: '1px 4px' }}>高能力</span>}
                     <button
+                      type="button"
                       className="btn btn-ghost"
                       style={{ fontSize: 10, padding: '1px 6px', opacity: 0.5 }}
-                      onClick={e => { e.stopPropagation(); setVal('fast_model', modelId) }}
+                      onClick={() => setVal('fast_model', modelId)}
                       title="设为快速模型"
                     >快速</button>
                     <button
+                      type="button"
                       className="btn btn-ghost"
                       style={{ fontSize: 10, padding: '1px 6px', opacity: 0.5 }}
-                      onClick={e => { e.stopPropagation(); setVal('high_capability_model', modelId) }}
+                      onClick={() => setVal('high_capability_model', modelId)}
                       title="设为高能力模型"
                     >高能力</button>
                   </div>

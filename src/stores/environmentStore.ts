@@ -7,58 +7,31 @@ interface EnvironmentState {
   status: EnvironmentStatus | null;
   loading: boolean;
   error: string | null;
-  lastDetected: string | null;
 
   detect: () => Promise<void>;
-  /** Refresh PATH from registry, then re-detect environment */
-  refreshAndDetect: () => Promise<void>;
-  clear: () => void;
 }
+
+// In-flight guard: App.tsx and EnvironmentPage both call detect() on mount.
+let detectInFlight: Promise<void> | null = null;
 
 export const useEnvironmentStore = create<EnvironmentState>((set) => ({
   status: null,
   loading: false,
   error: null,
-  lastDetected: null,
 
   detect: async () => {
-    set({ loading: true, error: null });
-    try {
-      const status = await api.detectEnvironment();
-      set({
-        status,
-        loading: false,
-        lastDetected: new Date().toISOString(),
-      });
-    } catch (err) {
-      set({
-        loading: false,
-        error: err instanceof Error ? err.message : '检测失败',
-      });
-    }
-  },
-
-  refreshAndDetect: async () => {
-    set({ loading: true, error: null });
-    try {
-      // First refresh the Windows environment from registry
-      await api.refreshEnvironment();
-      // Then re-detect everything
-      const status = await api.detectEnvironment();
-      set({
-        status,
-        loading: false,
-        lastDetected: new Date().toISOString(),
-      });
-    } catch (err) {
-      set({
-        loading: false,
-        error: err instanceof Error ? err.message : '刷新后检测失败',
-      });
-    }
-  },
-
-  clear: () => {
-    set({ status: null, lastDetected: null, error: null });
+    if (detectInFlight) return detectInFlight;
+    detectInFlight = (async () => {
+      set({ loading: true, error: null });
+      try {
+        const status = await api.detectEnvironment();
+        set({ status, loading: false });
+      } catch (err) {
+        set({ loading: false, error: api.errorMessage(err) });
+      } finally {
+        detectInFlight = null;
+      }
+    })();
+    return detectInFlight;
   },
 }));

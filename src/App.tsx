@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from './stores/appStore'
 import { useEnvironmentStore } from './stores/environmentStore'
 import { useConsoleStore } from './stores/consoleStore'
@@ -21,17 +22,37 @@ import { listen } from '@tauri-apps/api/event'
 type PageId = 'home' | 'environment' | 'providers' | 'config' | 'mcp' | 'diagnostics' | 'updates' | 'settings' | 'about'
 
 function App() {
-  const { effectiveTheme, reducedMotion, reducedGlass, onboardingCompleted } = useAppStore()
-  const { detect } = useEnvironmentStore()
-  const { add: consoleAdd, setActiveTask } = useConsoleStore()
+  const { effectiveTheme, reducedMotion, reducedGlass, onboardingCompleted } = useAppStore(
+    useShallow((s) => ({
+      effectiveTheme: s.effectiveTheme,
+      reducedMotion: s.reducedMotion,
+      reducedGlass: s.reducedGlass,
+      onboardingCompleted: s.onboardingCompleted,
+    })),
+  )
+  const detect = useEnvironmentStore((s) => s.detect)
+  const consoleAdd = useConsoleStore((s) => s.add)
+  const setActiveTask = useConsoleStore((s) => s.setActiveTask)
   const [currentPage, setCurrentPage] = useState<PageId>('home')
   const [restartPrompt, setRestartPrompt] = useState(false)
+  const restartDialogRef = useRef<HTMLDivElement>(null)
 
+  // Sync document attributes from global preferences.
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', effectiveTheme)
-    if (reducedMotion) document.documentElement.setAttribute('data-reduced-motion', 'true')
-    if (reducedGlass) document.documentElement.setAttribute('data-reduced-glass', 'true')
+  }, [effectiveTheme])
 
+  useEffect(() => {
+    if (reducedMotion) document.documentElement.setAttribute('data-reduced-motion', 'true')
+    else document.documentElement.removeAttribute('data-reduced-motion')
+  }, [reducedMotion])
+
+  useEffect(() => {
+    if (reducedGlass) document.documentElement.setAttribute('data-reduced-glass', 'true')
+    else document.documentElement.removeAttribute('data-reduced-glass')
+  }, [reducedGlass])
+
+  useEffect(() => {
     const handleHash = () => {
       const hash = window.location.hash.slice(1) || 'home'
       if (isValidPage(hash)) setCurrentPage(hash as PageId)
@@ -41,7 +62,9 @@ function App() {
     detect()
 
     // Subscribe to Tauri task events for the console panel + progress
+    const timers: ReturnType<typeof setTimeout>[] = []
     const unsubs: (() => void)[] = []
+
     listen<{ id: string; status: string; title: string; current_step?: string; progress?: number }>('task-updated', e => {
       const p = e.payload
       if (p.current_step) consoleAdd(p.current_step, 'progress')
@@ -59,7 +82,7 @@ function App() {
       if (p.status === 'Success') {
         consoleAdd(`[${p.title}] ✓ 完成`, 'success')
         setActiveTask({ id: '', title: '', step: '', progress: 100, status: 'success' })
-        setTimeout(() => setActiveTask(null), 3000)
+        timers.push(setTimeout(() => setActiveTask(null), 3000))
       }
       if (p.status === 'Failed') {
         consoleAdd(`[${p.title}] ✗ 失败`, 'error')
@@ -68,22 +91,34 @@ function App() {
     }).then(u => unsubs.push(u))
 
     // Listen for environment changes (after install completes)
-    listen<boolean>('environment-changed', () => {
+    listen<void>('environment-changed', () => {
       consoleAdd('环境已变更，自动重新检测...', 'info')
       detect()
     }).then(u => unsubs.push(u))
 
     // Listen for restart-required (base env installed, need restart for Claude Code)
-    listen<boolean>('restart-required', () => {
+    listen<void>('restart-required', () => {
       consoleAdd('Node.js 和 Git 安装完成，需要重启以继续安装 Claude Code', 'info')
       setRestartPrompt(true)
     }).then(u => unsubs.push(u))
 
     return () => {
       window.removeEventListener('hashchange', handleHash)
+      timers.forEach(clearTimeout)
       unsubs.forEach(fn => fn())
     }
-  }, [])
+  }, [detect, consoleAdd, setActiveTask])
+
+  // Restart dialog: Esc close + initial focus.
+  useEffect(() => {
+    if (!restartPrompt) return
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setRestartPrompt(false)
+    }
+    document.addEventListener('keydown', handleKey)
+    restartDialogRef.current?.focus()
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [restartPrompt])
 
   return (
     <>
@@ -108,11 +143,19 @@ function App() {
 
       {/* Restart dialog */}
       {restartPrompt && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 9999,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)',
-        }}>
+        <div
+          ref={restartDialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="重启提示"
+          tabIndex={-1}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 9999,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)',
+            outline: 'none',
+          }}
+        >
           <div style={{
             background: 'var(--bg-secondary)', borderRadius: 'var(--r3)',
             padding: 'var(--s5)', maxWidth: 400, width: '90%',

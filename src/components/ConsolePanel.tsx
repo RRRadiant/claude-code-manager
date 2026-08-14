@@ -1,8 +1,11 @@
 import { useEffect, useRef } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useConsoleStore } from '../stores/consoleStore'
 
 export default function ConsolePanel() {
-  const { entries, expanded, clear, toggle } = useConsoleStore()
+  const { entries, expanded, clear, toggle } = useConsoleStore(
+    useShallow((s) => ({ entries: s.entries, expanded: s.expanded, clear: s.clear, toggle: s.toggle })),
+  )
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {

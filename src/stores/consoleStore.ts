@@ -24,7 +24,6 @@ interface ConsoleState {
   toggle: () => void
   setExpanded: (v: boolean) => void
   setActiveTask: (task: ActiveTask | null) => void
-  updateActiveTask: (partial: Partial<ActiveTask>) => void
 }
 
 let id = 0
@@ -49,8 +48,4 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
   setExpanded: v => set({ expanded: v }),
 
   setActiveTask: task => set({ activeTask: task }),
-  updateActiveTask: partial =>
-    set(s => ({
-      activeTask: s.activeTask ? { ...s.activeTask, ...partial } : null,
-    })),
 }))

@@ -22,6 +22,7 @@ export function GlassCard({
   return (
     <LiquidGlass
       as={as} backdropBlur={blur} tintColor={tint}
+      className="liquid-glass"
       style={{
         position: 'relative',
         borderRadius: 'var(--r3)',

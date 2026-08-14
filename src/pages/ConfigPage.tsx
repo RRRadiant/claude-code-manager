@@ -1,29 +1,38 @@
 import { useEffect, useState, useCallback } from 'react'
-import type { ConfigFileInfo } from '../types'
+import type { ConfigFileInfo, ConfigScope } from '../types'
 import { listConfigFiles, readConfigFile, writeConfigFile, errorMessage } from '../services/tauri'
 import { GlassCard } from '../components/glass'
 
 export default function ConfigPage() {
   const [files, setFiles] = useState<ConfigFileInfo[]>([])
-  const [active, setActive] = useState<string | null>(null)
+  const [active, setActive] = useState<ConfigScope | null>(null)
   const [content, setContent] = useState('')
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => { loadFiles() }, [])
 
   const loadFiles = async () => {
-    try { setFiles(await listConfigFiles()) } catch { /* noop */ }
+    try {
+      setFiles(await listConfigFiles())
+      setLoadError(null)
+    } catch (e) {
+      setLoadError(errorMessage(e))
+    }
   }
 
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; msg: string } | null>(null)
 
-  const handleSelect = async (scope: string) => {
+  const handleSelect = async (scope: ConfigScope) => {
     setActive(scope); setLoading(true); setSaveMsg(null)
     try {
       const r = await readConfigFile(scope)
       setContent(r?.content ?? '')
-    } catch { setContent('// 无法读取') }
+    } catch (e) {
+      setContent('// 无法读取')
+      setSaveMsg({ ok: false, msg: errorMessage(e) })
+    }
     finally { setLoading(false) }
   }
 
@@ -55,6 +64,8 @@ export default function ConfigPage() {
   return (
     <div className="page" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 34px)' }}>
       <h1 style={{ marginBottom: 'var(--s4)', flexShrink: 0 }}>配置文件</h1>
+
+      {loadError && <div className="alert" style={{ marginBottom: 'var(--s2)', flexShrink: 0 }}>{loadError}</div>}
 
       <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '220px 1fr', gap: 'var(--s2)' }}>
         {/* Sidebar file list */}

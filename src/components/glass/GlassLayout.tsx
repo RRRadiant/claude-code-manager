@@ -25,6 +25,7 @@ export function GlassLayout({
         as="main"
         backdropBlur={2}
         tintColor="rgba(255,255,255,0.03)"
+        className="liquid-glass"
         style={{
           overflow: 'auto', padding: 'var(--s5)',
           borderRadius: 0, clipPath: 'inset(0)',

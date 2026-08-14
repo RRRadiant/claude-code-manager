@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '../stores/appStore'
 
 export default function SettingsPage() {
@@ -6,7 +7,14 @@ export default function SettingsPage() {
     reducedMotion, setReducedMotion,
     reducedGlass, setReducedGlass,
     sidebarCollapsed, toggleSidebar,
-  } = useAppStore()
+  } = useAppStore(
+    useShallow((s) => ({
+      theme: s.theme, setTheme: s.setTheme,
+      reducedMotion: s.reducedMotion, setReducedMotion: s.setReducedMotion,
+      reducedGlass: s.reducedGlass, setReducedGlass: s.setReducedGlass,
+      sidebarCollapsed: s.sidebarCollapsed, toggleSidebar: s.toggleSidebar,
+    })),
+  )
 
   return (
     <div className="page">
@@ -25,14 +33,14 @@ export default function SettingsPage() {
         </Setting>
         <Setting label="减少动画" desc="关闭过渡动效">
           <label className="toggle">
-            <input type="checkbox" checked={reducedMotion} onChange={e => setReducedMotion(e.target.checked)} />
-            <span className="toggle-slider" />
+            <input type="checkbox" aria-label="减少动画" checked={reducedMotion} onChange={e => setReducedMotion(e.target.checked)} />
+            <span className="toggle-slider" aria-hidden="true" />
           </label>
         </Setting>
         <Setting label="减少玻璃效果" desc="关闭 Liquid Glass 特效">
           <label className="toggle">
-            <input type="checkbox" checked={reducedGlass} onChange={e => setReducedGlass(e.target.checked)} />
-            <span className="toggle-slider" />
+            <input type="checkbox" aria-label="减少玻璃效果" checked={reducedGlass} onChange={e => setReducedGlass(e.target.checked)} />
+            <span className="toggle-slider" aria-hidden="true" />
           </label>
         </Setting>
       </div>
