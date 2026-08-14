@@ -4,7 +4,7 @@ use serde::Serialize;
 /// Application-wide error type with user-friendly messages
 #[derive(Debug, Clone, Serialize)]
 pub struct AppError {
-    /// Machine-readable error code (e.g., "INSTALL_NETWORK_ERROR")
+    /// Machine-readable error code (e.g., "`INSTALL_NETWORK_ERROR`")
     pub code: String,
     /// User-facing short title
     pub title: String,
@@ -63,7 +63,7 @@ impl std::fmt::Display for AppError {
 
 impl std::error::Error for AppError {}
 
-/// Convert common errors into AppError
+/// Convert common errors into `AppError`
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
         AppError::new(
@@ -94,16 +94,12 @@ impl From<keyring::Error> for AppError {
             keyring::Error::NoStorageAccess(_) => "CREDENTIALS_ACCESS_DENIED",
             _ => "CREDENTIALS_ERROR",
         };
-        AppError::new(
-            code,
-            "凭据操作失败",
-            "无法存取 Windows 凭据管理器。",
-        )
-        .with_details(e.to_string())
+        AppError::new(code, "凭据操作失败", "无法存取 Windows 凭据管理器。")
+            .with_details(e.to_string())
     }
 }
 
-/// Result type alias using AppError
+/// Result type alias using `AppError`
 pub type AppResult<T> = Result<T, AppError>;
 
 /// Error code constants — all codes referenced by at least one module
@@ -121,5 +117,7 @@ pub mod codes {
     pub const MODEL_LIST_UNAVAILABLE: &str = "MODEL_LIST_UNAVAILABLE";
     pub const SECURITY_PATH_TRAVERSAL: &str = "SECURITY_PATH_TRAVERSAL";
     pub const SECURITY_INVALID_INPUT: &str = "SECURITY_INVALID_INPUT";
+    // Used only in the non-Windows fallback of credentials.rs (compiled out on Windows).
+    #[allow(dead_code)]
     pub const SECURITY_PERMISSION_DENIED: &str = "SECURITY_PERMISSION_DENIED";
 }

@@ -1,12 +1,12 @@
 // Claude Code Manager - Command executor: safe process execution
-use crate::error::{AppError, AppResult};
+use crate::error::{codes, AppError, AppResult};
 use crate::logging::LogSanitizer;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::io::AsyncReadExt;
+use tokio::process::Command;
 use tokio::time::timeout;
 
 /// Maximum bytes of stdout/stderr to capture per process, to bound memory usage
@@ -21,7 +21,6 @@ pub struct CommandSpec {
     pub cwd: Option<PathBuf>,
     pub env: Vec<(String, String)>,
     pub timeout: Duration,
-    pub merge_stderr: bool,
 }
 
 impl CommandSpec {
@@ -32,16 +31,33 @@ impl CommandSpec {
             cwd: None,
             env: Vec::new(),
             timeout: Duration::from_secs(120),
-            merge_stderr: true,
         }
     }
-    pub fn arg(mut self, arg: impl Into<String>) -> Self { self.args.push(arg.into()); self }
-    pub fn args(mut self, args: Vec<String>) -> Self { self.args = args; self }
-    pub fn cwd(mut self, path: impl Into<PathBuf>) -> Self { self.cwd = Some(path.into()); self }
-    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.env.push((key.into(), value.into())); self
+    // Convenience builder methods; production code uses `args(Vec)`, while the
+    // per-item variants are exercised by the unit tests below.
+    #[allow(dead_code)]
+    pub fn arg(mut self, arg: impl Into<String>) -> Self {
+        self.args.push(arg.into());
+        self
     }
-    pub fn timeout(mut self, duration: Duration) -> Self { self.timeout = duration; self }
+    pub fn args(mut self, args: Vec<String>) -> Self {
+        self.args = args;
+        self
+    }
+    #[allow(dead_code)]
+    pub fn cwd(mut self, path: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(path.into());
+        self
+    }
+    #[allow(dead_code)]
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.push((key.into(), value.into()));
+        self
+    }
+    pub fn timeout(mut self, duration: Duration) -> Self {
+        self.timeout = duration;
+        self
+    }
 }
 
 /// Output from a completed command
@@ -49,7 +65,6 @@ impl CommandSpec {
 pub struct ProcessOutput {
     pub stdout: String,
     pub stderr: String,
-    pub exit_code: i32,
     pub success: bool,
 }
 
@@ -64,8 +79,12 @@ pub async fn execute_command(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
 
-    if let Some(cwd) = &spec.cwd { cmd.current_dir(cwd); }
-    for (k, v) in &spec.env { cmd.env(k, v); }
+    if let Some(cwd) = &spec.cwd {
+        cmd.current_dir(cwd);
+    }
+    for (k, v) in &spec.env {
+        cmd.env(k, v);
+    }
 
     #[cfg(windows)]
     {
@@ -73,9 +92,13 @@ pub async fn execute_command(
     }
 
     let mut child = cmd.spawn().map_err(|e| {
-        AppError::new("INSTALL_DOWNLOAD_FAILED", "进程启动失败",
-            format!("无法启动进程 '{}'。", spec.program))
-            .with_details(e.to_string()).retryable()
+        AppError::new(
+            "INSTALL_DOWNLOAD_FAILED",
+            "进程启动失败",
+            format!("无法启动进程 '{}'。", spec.program),
+        )
+        .with_details(e.to_string())
+        .retryable()
     })?;
 
     // Take stdout/stderr handles for concurrent reading
@@ -93,17 +116,21 @@ pub async fn execute_command(
                 if flag.load(Ordering::SeqCst) {
                     kill_process_tree(&mut child).await;
                     return Err(AppError::new(
-                        "INSTALL_CANCELLED", "操作已取消", "用户取消了操作。"));
+                        codes::INSTALL_CANCELLED,
+                        "操作已取消",
+                        "用户取消了操作。",
+                    ));
                 }
             }
             tokio::select! {
                 status = child.wait() => {
-                    return Ok(status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1));
+                    return Ok(status.map_or(-1, |s| s.code().unwrap_or(-1)));
                 }
-                _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+                () = tokio::time::sleep(Duration::from_millis(200)) => {}
             }
         }
-    }).await;
+    })
+    .await;
 
     // On timeout, kill the whole process tree; on success/cancel leave it be.
     let timed_out = wait_result.is_err();
@@ -122,14 +149,18 @@ pub async fn execute_command(
 
     match wait_result {
         Ok(Ok(exit_code)) => Ok(ProcessOutput {
-            stdout, stderr, exit_code,
+            stdout,
+            stderr,
             success: exit_code == 0,
         }),
         Ok(Err(e)) => Err(e),
         Err(_) => Err(AppError::new(
-            "INSTALL_TIMEOUT", "操作超时",
+            codes::INSTALL_TIMEOUT,
+            "操作超时",
             format!("命令执行超过 {} 秒。", spec.timeout.as_secs()),
-        ).with_suggestion("请检查网络连接后重试。").retryable()),
+        )
+        .with_suggestion("请检查网络连接后重试。")
+        .retryable()),
     }
 }
 
@@ -157,7 +188,10 @@ async fn kill_process_tree(child: &mut tokio::process::Child) {
 }
 
 async fn read_all(handle: Option<tokio::process::ChildStdout>) -> String {
-    let mut h = match handle { Some(h) => h, None => return String::new() };
+    let h = match handle {
+        Some(h) => h,
+        None => return String::new(),
+    };
     let mut buf = Vec::new();
     let mut limited = h.take(MAX_OUTPUT_BYTES);
     let _ = limited.read_to_end(&mut buf).await;
@@ -166,7 +200,10 @@ async fn read_all(handle: Option<tokio::process::ChildStdout>) -> String {
 
 // Support stderr too - need a method that works for both types
 async fn read_all_stderr(handle: Option<tokio::process::ChildStderr>) -> String {
-    let mut h = match handle { Some(h) => h, None => return String::new() };
+    let h = match handle {
+        Some(h) => h,
+        None => return String::new(),
+    };
     let mut buf = Vec::new();
     let mut limited = h.take(MAX_OUTPUT_BYTES);
     let _ = limited.read_to_end(&mut buf).await;
@@ -183,7 +220,11 @@ pub fn quick_command(program: &str, args: &[&str]) -> Option<String> {
         cmd.creation_flags(0x08000000);
     }
     cmd.output().ok().and_then(|o| {
-        if o.status.success() { String::from_utf8(o.stdout).ok() } else { None }
+        if o.status.success() {
+            String::from_utf8(o.stdout).ok()
+        } else {
+            None
+        }
     })
 }
 
@@ -205,7 +246,10 @@ mod tests {
             .timeout(Duration::from_secs(30));
         assert_eq!(spec.program, "node.exe");
         assert_eq!(spec.args, vec!["--version", "--no-warnings"]);
-        assert_eq!(spec.env, vec![("NODE_ENV".to_string(), "production".to_string())]);
+        assert_eq!(
+            spec.env,
+            vec![("NODE_ENV".to_string(), "production".to_string())]
+        );
     }
 
     #[test]
@@ -241,14 +285,17 @@ mod tests {
         let result = execute_command(&spec, None).await;
         assert!(result.is_ok());
         let out = result.unwrap();
-        assert!(out.stdout.contains("hello"), "stdout should contain 'hello', got: '{}'", out.stdout);
+        assert!(
+            out.stdout.contains("hello"),
+            "stdout should contain 'hello', got: '{}'",
+            out.stdout
+        );
         assert!(out.success);
     }
 
     #[tokio::test]
     async fn test_execute_command_fails_gracefully() {
-        let spec = CommandSpec::new("nonexistent_cmd_99999.exe")
-            .timeout(Duration::from_secs(5));
+        let spec = CommandSpec::new("nonexistent_cmd_99999.exe").timeout(Duration::from_secs(5));
         let result = execute_command(&spec, None).await;
         assert!(result.is_err());
     }

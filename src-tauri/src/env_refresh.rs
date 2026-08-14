@@ -9,7 +9,7 @@
 // installed tools without a restart.
 
 use serde::Serialize;
-use winreg::enums::*;
+use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
 use winreg::RegKey;
 
 /// Result of refreshing PATH from the registry
@@ -23,7 +23,7 @@ pub struct RefreshedPath {
     pub system_path: String,
     /// The original process PATH (before refresh)
     pub process_path: String,
-    /// Directories in merged_path that were NOT in process_path
+    /// Directories in `merged_path` that were NOT in `process_path`
     pub added_directories: Vec<String>,
     /// Whether the refresh changed anything meaningful
     pub changed: bool,
@@ -50,7 +50,7 @@ pub fn read_system_path_registry() -> Option<String> {
         .map(expand_environment_variables)
 }
 
-/// Expand %VAR% references in a string using Windows ExpandEnvironmentStringsW
+/// Expand %VAR% references in a string using Windows `ExpandEnvironmentStringsW`
 fn expand_environment_variables(input: String) -> String {
     // Use the Win32 API to expand %SystemRoot%, %USERPROFILE%, etc.
     // SAFETY: ExpandEnvironmentStringsW is safe to call with a valid input string.
@@ -154,31 +154,19 @@ pub fn refresh_windows_path() -> RefreshedPath {
 /// Build a complete environment block for a subprocess that includes
 /// the refreshed PATH. Returns key-value pairs suitable for
 /// `std::process::Command::envs()` or `CommandSpec::env()`.
+// Only exercised by unit tests today; kept as part of the PATH-refresh toolkit.
+#[allow(dead_code)]
 pub fn build_refreshed_env() -> Vec<(String, String)> {
     let refreshed = refresh_windows_path();
     vec![("PATH".to_string(), refreshed.merged_path)]
 }
 
 /// Check whether a specific directory path contains a given executable.
+// Only exercised by unit tests today; kept as part of the PATH-refresh toolkit.
+#[allow(dead_code)]
 pub fn dir_contains_exe(dir: &str, exe_name: &str) -> bool {
     let path = std::path::Path::new(dir).join(exe_name);
     path.exists()
-}
-
-/// Find an executable by searching the refreshed PATH (registry-based).
-/// Returns the absolute path if found, or None.
-pub fn find_exe_on_refreshed_path(exe_name: &str) -> Option<String> {
-    let refreshed = refresh_windows_path();
-    for entry in refreshed.merged_path.split(';') {
-        let candidate = std::path::Path::new(entry.trim()).join(exe_name);
-        if candidate.exists() {
-            // Try to resolve to absolute path
-            return std::fs::canonicalize(candidate)
-                .ok()
-                .map(|p| p.to_string_lossy().to_string());
-        }
-    }
-    None
 }
 
 /// Execute a command and return its stdout, using a **fresh** PATH.
@@ -193,7 +181,9 @@ pub fn detect_with_fresh_path(program: &str, arg: &str) -> Option<String> {
 
     cmd.output().ok().and_then(|o| {
         if o.status.success() {
-            String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
+            String::from_utf8(o.stdout)
+                .ok()
+                .map(|s| s.trim().to_string())
         } else {
             None
         }
@@ -236,7 +226,10 @@ mod tests {
     fn test_read_system_path_no_panic() {
         let path = read_system_path_registry();
         assert!(path.is_some(), "System PATH should always exist on Windows");
-        println!("System PATH length: {}", path.as_ref().map(|s| s.len()).unwrap_or(0));
+        println!(
+            "System PATH length: {}",
+            path.as_ref().map(|s| s.len()).unwrap_or(0)
+        );
     }
 
     #[test]
@@ -244,9 +237,11 @@ mod tests {
         let r = refresh_windows_path();
         assert!(!r.merged_path.is_empty(), "merged PATH should not be empty");
         assert!(!r.system_path.is_empty(), "system PATH should not be empty");
-        println!("Merged PATH length: {}, entries: {}",
+        println!(
+            "Merged PATH length: {}, entries: {}",
             r.merged_path.len(),
-            r.merged_path.split(';').count());
+            r.merged_path.split(';').count()
+        );
     }
 
     #[test]
@@ -259,7 +254,7 @@ mod tests {
 
     #[test]
     fn test_merge_path_strings() {
-        let (merged, added) = merge_path_strings(
+        let (merged, _added) = merge_path_strings(
             r"C:\Windows;C:\Windows\System32",
             r"C:\Users\test\bin;C:\Windows",
         );
@@ -267,8 +262,15 @@ mod tests {
         assert!(merged.contains(r"C:\Users\test\bin"));
         // Verify dedup: "C:\Windows" should appear only once
         let entries: Vec<&str> = merged.split(';').collect();
-        let count = entries.iter().filter(|e| e.trim().eq_ignore_ascii_case(r"C:\Windows")).count();
-        assert_eq!(count, 1, "'C:\\Windows' should be deduplicated, got entries: {:?}", entries);
+        let count = entries
+            .iter()
+            .filter(|e| e.trim().eq_ignore_ascii_case(r"C:\Windows"))
+            .count();
+        assert_eq!(
+            count, 1,
+            "'C:\\Windows' should be deduplicated, got entries: {:?}",
+            entries
+        );
     }
 
     #[test]
@@ -281,7 +283,10 @@ mod tests {
     #[test]
     fn test_dir_contains_exe() {
         assert!(dir_contains_exe(r"C:\Windows\System32", "cmd.exe"));
-        assert!(!dir_contains_exe(r"C:\Windows\System32", "nonexistent_xyz_999.exe"));
+        assert!(!dir_contains_exe(
+            r"C:\Windows\System32",
+            "nonexistent_xyz_999.exe"
+        ));
     }
 
     #[test]

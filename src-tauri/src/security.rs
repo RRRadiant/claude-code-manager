@@ -1,5 +1,5 @@
 // Claude Code Manager - Security: input validation, path sanitization, IPC guard
-use crate::error::{AppError, codes};
+use crate::error::{codes, AppError};
 use std::path::{Component, Path, PathBuf};
 
 /// Validate and normalize a file path, preventing path traversal.
@@ -145,7 +145,7 @@ fn normalized(path: &Path) -> String {
 fn is_within(path: &Path, root: &Path) -> bool {
     let p = normalized(path);
     let r = normalized(root);
-    p == r || p.starts_with(&format!("{}\\", r))
+    p == r || p.starts_with(&format!("{r}\\"))
 }
 
 /// Case-insensitive equality check between two paths.
@@ -153,32 +153,11 @@ fn is_same_path(a: &Path, b: &Path) -> bool {
     normalized(a) == normalized(b)
 }
 
-/// Safely resolve a path without following symlinks (prevents TOCTOU)
-pub fn resolve_safe(path: &Path) -> PathBuf {
-    let mut result = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => {
-                result.push(prefix.as_os_str());
-            }
-            Component::RootDir => {
-                result.push(Component::RootDir);
-            }
-            Component::ParentDir => {
-                result.pop();
-            }
-            Component::Normal(part) => {
-                result.push(part);
-            }
-            _ => {}
-        }
-    }
-    result
-}
-
 /// Validate that a string is safe (no shell metacharacters)
 pub fn validate_shell_arg(input: &str) -> Result<&str, AppError> {
-    let dangerous = ['&', '|', ';', '$', '`', '\'', '"', '(', ')', '{', '}', '<', '>', '\n', '\r'];
+    let dangerous = [
+        '&', '|', ';', '$', '`', '\'', '"', '(', ')', '{', '}', '<', '>', '\n', '\r',
+    ];
 
     if input.is_empty() {
         return Err(AppError::new(
@@ -200,7 +179,7 @@ pub fn validate_shell_arg(input: &str) -> Result<&str, AppError> {
         return Err(AppError::new(
             codes::SECURITY_INVALID_INPUT,
             "输入包含危险字符",
-            format!("参数包含不允许的字符 '{}'。", c),
+            format!("参数包含不允许的字符 '{c}'。"),
         ));
     }
 
@@ -216,8 +195,8 @@ pub fn validate_shell_arg(input: &str) -> Result<&str, AppError> {
 /// (so `npx`, `npx.exe`, `npx.cmd` all resolve to `npx`), case-insensitively.
 pub fn validate_mcp_command(command: &str) -> Result<(), AppError> {
     const ALLOWED: &[&str] = &[
-        "npx", "npm", "node", "uvx", "uv", "python", "python3", "py", "bun", "deno",
-        "docker", "cargo", "git", "claude", "go",
+        "npx", "npm", "node", "uvx", "uv", "python", "python3", "py", "bun", "deno", "docker",
+        "cargo", "git", "claude", "go",
     ];
 
     if command.is_empty() {
@@ -251,10 +230,10 @@ pub fn validate_mcp_command(command: &str) -> Result<(), AppError> {
         ));
     }
 
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_lowercase())
-        .unwrap_or_else(|| command.to_lowercase());
+    let stem = path.file_stem().map_or_else(
+        || command.to_lowercase(),
+        |s| s.to_string_lossy().to_lowercase(),
+    );
 
     if ALLOWED.iter().any(|a| a.eq_ignore_ascii_case(&stem)) {
         Ok(())
@@ -262,7 +241,7 @@ pub fn validate_mcp_command(command: &str) -> Result<(), AppError> {
         Err(AppError::new(
             codes::SECURITY_INVALID_INPUT,
             "命令未授权",
-            format!("MCP 命令 '{}' 不在允许列表内。", command),
+            format!("MCP 命令 '{command}' 不在允许列表内。"),
         ))
     }
 }
@@ -321,8 +300,7 @@ pub fn is_elevated() -> bool {
         .args(["session"])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
 #[cfg(test)]
@@ -331,7 +309,8 @@ mod tests {
 
     #[test]
     fn test_sanitize_path_normal() {
-        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+        let home =
+            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
         let result = sanitize_path(&home, &[], &[]);
         assert!(result.is_ok());
     }
@@ -401,18 +380,12 @@ mod tests {
         assert!(validate_mcp_command("pOwErShElL.exe").is_err());
     }
 
-    #[test]
-    fn test_resolve_safe() {
-        let path = Path::new("C:\\Users\\test\\..\\test2\\file.txt");
-        let resolved = resolve_safe(path);
-        assert_eq!(resolved, PathBuf::from("C:\\Users\\test2\\file.txt"));
-    }
-
     // ── More sanitize_path edge cases ────────────────────────────
 
     #[test]
     fn test_sanitize_path_within_allowed_root() {
-        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+        let home =
+            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
         let root = Path::new(&home);
         let canonical_root = std::fs::canonicalize(&home).unwrap_or_else(|_| root.to_path_buf());
         let result = sanitize_path(&home, &[&canonical_root], &[]);
@@ -445,7 +418,8 @@ mod tests {
 
     #[test]
     fn test_sanitize_path_empty_allowed_roots() {
-        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+        let home =
+            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
         let result = sanitize_path(&home, &[], &[]);
         assert!(result.is_ok());
     }
@@ -453,7 +427,10 @@ mod tests {
     #[test]
     fn test_sanitize_path_non_existent_valid_parent() {
         let result = sanitize_path("C:\\Windows\\_test_tmp_file_12345.tmp", &[], &[]);
-        assert!(result.is_ok(), "non-existent file with valid parent should resolve");
+        assert!(
+            result.is_ok(),
+            "non-existent file with valid parent should resolve"
+        );
     }
 
     #[test]
@@ -466,11 +443,15 @@ mod tests {
 
     #[test]
     fn test_sanitize_path_traversal_escape_root() {
-        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+        let home =
+            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
         let root = Path::new(&home);
         let canonical_root = std::fs::canonicalize(&home).unwrap_or_else(|_| root.to_path_buf());
         let result = sanitize_path(&home, &[&canonical_root], &[]);
-        assert!(result.is_ok(), "traversal that stays within root should pass");
+        assert!(
+            result.is_ok(),
+            "traversal that stays within root should pass"
+        );
     }
 
     #[test]
@@ -478,26 +459,34 @@ mod tests {
         let root = Path::new("C:\\Windows\\System32");
         // ..\\.. lands in C:\ which is outside C:\Windows\System32
         let result = sanitize_path("C:\\Windows\\System32\\..\\..\\Program Files", &[root], &[]);
-        assert!(result.is_err(), "traversal escaping root should be rejected");
+        assert!(
+            result.is_err(),
+            "traversal escaping root should be rejected"
+        );
     }
 
     #[test]
     fn test_sanitize_path_allowed_file() {
         // A root-level file must only be allowed via the file allow-list, not a dir root.
-        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+        let home =
+            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
         let file = PathBuf::from(&home).join(".claude.json");
-        let result = sanitize_path(&file.to_string_lossy(), &[], &[&file.as_path()]);
+        let result = sanitize_path(&file.to_string_lossy(), &[], &[file.as_path()]);
         assert!(result.is_ok(), "allow-listed file should pass");
     }
 
     #[test]
     fn test_sanitize_path_file_not_allowed() {
-        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+        let home =
+            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
         let file = PathBuf::from(&home).join(".claude.json");
         // A non-matching root with empty file list => rejected.
         let root = Path::new("C:\\Windows");
         let result = sanitize_path(&file.to_string_lossy(), &[root], &[]);
-        assert!(result.is_err(), "file outside roots and file list should be rejected");
+        assert!(
+            result.is_err(),
+            "file outside roots and file list should be rejected"
+        );
     }
 
     // ── validate_shell_arg edge cases ────────────────────────────
@@ -505,18 +494,26 @@ mod tests {
     #[test]
     fn test_validate_shell_arg_length_boundary() {
         let len_4096 = "a".repeat(4096);
-        assert!(validate_shell_arg(&len_4096).is_ok(), "4096 should be within limit");
+        assert!(
+            validate_shell_arg(&len_4096).is_ok(),
+            "4096 should be within limit"
+        );
     }
 
     #[test]
     fn test_validate_shell_arg_max_valid_length() {
         let len_4095 = "a".repeat(4095);
-        assert!(validate_shell_arg(&len_4095).is_ok(), "4095 chars should be within limit");
+        assert!(
+            validate_shell_arg(&len_4095).is_ok(),
+            "4095 chars should be within limit"
+        );
     }
 
     #[test]
     fn test_validate_shell_arg_each_dangerous_char() {
-        let dangerous = ['&', '|', ';', '$', '`', '\'', '"', '(', ')', '{', '}', '<', '>'];
+        let dangerous = [
+            '&', '|', ';', '$', '`', '\'', '"', '(', ')', '{', '}', '<', '>',
+        ];
         for ch in &dangerous {
             let input = format!("arg{}val", ch);
             assert!(
@@ -585,43 +582,6 @@ mod tests {
         assert!(validate_mcp_command("").is_err());
     }
 
-    // ── resolve_safe edge cases ─────────────────────────────────
-
-    #[test]
-    fn test_resolve_safe_traversal_multiple() {
-        let path = Path::new("C:\\Users\\a\\b\\..\\..\\..\\Windows\\System32");
-        let resolved = resolve_safe(path);
-        assert_eq!(resolved, PathBuf::from("C:\\Windows\\System32"));
-    }
-
-    #[test]
-    fn test_resolve_safe_no_traversal() {
-        let path = Path::new("C:\\Users\\test\\.claude\\settings.json");
-        let resolved = resolve_safe(path);
-        assert_eq!(resolved, PathBuf::from("C:\\Users\\test\\.claude\\settings.json"));
-    }
-
-    #[test]
-    fn test_resolve_safe_single_component() {
-        let path = Path::new("file.txt");
-        let resolved = resolve_safe(path);
-        assert_eq!(resolved, PathBuf::from("file.txt"));
-    }
-
-    #[test]
-    fn test_resolve_safe_traversal_below_root() {
-        let path = Path::new("C:\\..\\Windows");
-        let resolved = resolve_safe(path);
-        assert!(!resolved.as_os_str().is_empty());
-    }
-
-    #[test]
-    fn test_resolve_safe_empty_traversal() {
-        let path = Path::new("a\\b\\..\\..");
-        let resolved = resolve_safe(path);
-        assert_eq!(resolved, PathBuf::from(""));
-    }
-
     // ── is_elevated edge cases ──────────────────────────────────
 
     #[test]
@@ -636,8 +596,16 @@ mod tests {
     fn test_validate_shell_arg_then_validate_mcp() {
         let valid = ["npx", "npm", "node", "claude"];
         for cmd in &valid {
-            assert!(validate_shell_arg(cmd).is_ok(), "shell arg should accept '{}'", cmd);
-            assert!(validate_mcp_command(cmd).is_ok(), "mcp cmd should accept '{}'", cmd);
+            assert!(
+                validate_shell_arg(cmd).is_ok(),
+                "shell arg should accept '{}'",
+                cmd
+            );
+            assert!(
+                validate_mcp_command(cmd).is_ok(),
+                "mcp cmd should accept '{}'",
+                cmd
+            );
         }
     }
 

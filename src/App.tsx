@@ -18,6 +18,7 @@ import UpdatesPage from './pages/UpdatesPage'
 import SettingsPage from './pages/SettingsPage'
 import AboutPage from './pages/AboutPage'
 import { listen } from '@tauri-apps/api/event'
+import { restartApp } from './services/tauri'
 
 type PageId = 'home' | 'environment' | 'providers' | 'config' | 'mcp' | 'diagnostics' | 'updates' | 'settings' | 'about'
 
@@ -175,7 +176,6 @@ function App() {
                 setRestartPrompt(false)
                 consoleAdd('正在重启应用...', 'info')
                 try {
-                  const { restartApp } = await import('./services/tauri')
                   await restartApp()
                 } catch { /* restart will close the app */ }
               }} style={{ fontSize: 'var(--text-sm)' }}>

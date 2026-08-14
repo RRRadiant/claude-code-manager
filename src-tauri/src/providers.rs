@@ -1,6 +1,6 @@
 // Claude Code Manager - Provider adapter trait and implementations
 use crate::error::AppResult;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Provider capability flags (inferred, not guaranteed by API)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,9 +43,6 @@ pub struct ModelInfo {
 /// Provider adapter trait — every provider implements this
 #[async_trait::async_trait]
 pub trait ProviderAdapter: Send + Sync {
-    /// Validate provider configuration format
-    async fn validate_config(&self, config: &ProviderConfig) -> AppResult<ValidationResult>;
-
     /// Test network connectivity to the provider
     async fn test_connection(&self, config: &ProviderConfig) -> AppResult<ConnectionResult>;
 
@@ -54,17 +51,6 @@ pub trait ProviderAdapter: Send + Sync {
 
     /// Apply this provider's configuration to Claude Code settings
     async fn apply_config(&self, config: &ProviderConfig) -> AppResult<()>;
-
-    /// Remove this provider's configuration from Claude Code settings
-    async fn remove_config(&self) -> AppResult<()>;
-}
-
-/// Configuration validation result
-#[derive(Debug, Clone, Serialize)]
-pub struct ValidationResult {
-    pub valid: bool,
-    pub errors: Vec<String>,
-    pub warnings: Vec<String>,
 }
 
 /// Connection test result

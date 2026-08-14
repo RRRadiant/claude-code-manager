@@ -89,12 +89,7 @@ impl TaskManager {
     }
 
     /// Create a new task and return its ID
-    pub fn create_task(
-        &self,
-        type_: TaskType,
-        title: String,
-        cancellable: bool,
-    ) -> String {
+    pub fn create_task(&self, type_: TaskType, title: String, cancellable: bool) -> String {
         let id = Uuid::new_v4().to_string();
         let task = TaskHandle {
             state: TaskState {
@@ -128,13 +123,7 @@ impl TaskManager {
     }
 
     /// Update task progress
-    pub fn update_progress(
-        &self,
-        id: &str,
-        progress: f64,
-        step: Option<String>,
-        app: &AppHandle,
-    ) {
+    pub fn update_progress(&self, id: &str, progress: f64, step: Option<String>, app: &AppHandle) {
         // Sanitize step message before it is stored/emitted (may embed command
         // output or URLs containing secrets).
         let step = step.map(|s| {
@@ -166,7 +155,8 @@ impl TaskManager {
     /// Mark task as failed
     pub fn fail_task(&self, id: &str, error: String, app: &AppHandle) {
         // Sanitize the error before it is stored/emitted.
-        let error = app.state::<crate::AppState>()
+        let error = app
+            .state::<crate::AppState>()
             .log_sanitizer
             .sanitize(&error)
             .to_string();
@@ -197,8 +187,7 @@ impl TaskManager {
         let tasks = self.tasks.lock().expect("task lock poisoned");
         tasks
             .get(id)
-            .map(|t| t.cancel_flag.load(Ordering::SeqCst))
-            .unwrap_or(false)
+            .is_some_and(|t| t.cancel_flag.load(Ordering::SeqCst))
     }
 
     /// Get a cancel flag for a task (to be cloned into spawned tasks)
@@ -216,11 +205,6 @@ impl TaskManager {
     /// Remove completed tasks (keep recent ones)
     pub fn clear_completed(&self) {
         let mut tasks = self.tasks.lock().expect("task lock poisoned");
-        tasks.retain(|_, t| {
-            matches!(
-                t.state.status,
-                TaskStatus::Queued | TaskStatus::Running
-            )
-        });
+        tasks.retain(|_, t| matches!(t.state.status, TaskStatus::Queued | TaskStatus::Running));
     }
 }

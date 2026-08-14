@@ -2,7 +2,7 @@
 pub mod config;
 pub mod diagnostics;
 pub mod environment;
+pub mod installer;
 pub mod mcp;
 pub mod providers;
-pub mod installer;
 pub mod task;

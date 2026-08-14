@@ -1,18 +1,7 @@
-use crate::error::{AppError, codes};
-use crate::impl_providers::*;
 use crate::credentials;
-use crate::providers::{ProviderConfig, ProviderAdapter};
-use serde::{Serialize, Deserialize};
-
-#[derive(Serialize, Deserialize)]
-pub struct SavedProviderInfo {
-    pub api_key_exists: bool,
-    pub base_url: Option<String>,
-    pub default_model: Option<String>,
-    pub fast_model: Option<String>,
-    pub high_capability_model: Option<String>,
-    pub timeout_secs: Option<u64>,
-}
+use crate::error::{codes, AppError};
+use crate::impl_providers::{AnthropicProvider, CustomProvider, DeepSeekProvider};
+use crate::providers::{ProviderAdapter, ProviderConfig};
 
 #[tauri::command]
 pub async fn test_provider_connection(
@@ -24,7 +13,7 @@ pub async fn test_provider_connection(
 ) -> Result<serde_json::Value, AppError> {
     let config = ProviderConfig {
         provider_type: provider_type.clone(),
-        name: format!("{}-test", provider_type),
+        name: format!("{provider_type}-test"),
         base_url: base_url.unwrap_or_else(|| match provider_type.as_str() {
             "anthropic" => "https://api.anthropic.com".to_string(),
             "deepseek" => "https://api.deepseek.com/anthropic".to_string(),
@@ -63,7 +52,7 @@ pub async fn detect_provider_models(
 ) -> Result<serde_json::Value, AppError> {
     let config = ProviderConfig {
         provider_type: provider_type.clone(),
-        name: format!("{}-models", provider_type),
+        name: format!("{provider_type}-models"),
         base_url: base_url.unwrap_or_else(|| match provider_type.as_str() {
             "anthropic" => "https://api.anthropic.com".to_string(),
             "deepseek" => "https://api.deepseek.com/anthropic".to_string(),
@@ -103,9 +92,7 @@ pub async fn save_provider_credential(
 }
 
 #[tauri::command]
-pub async fn get_provider_credential(
-    provider_type: String,
-) -> Result<serde_json::Value, AppError> {
+pub async fn get_provider_credential(provider_type: String) -> Result<serde_json::Value, AppError> {
     let cred_id = credentials::credential_id(&provider_type, "default");
     match credentials::get_credential(&cred_id, "api_key") {
         Ok(key) => {
@@ -127,20 +114,26 @@ fn mask_secret(secret: &str) -> String {
     }
     let chars: Vec<char> = secret.chars().collect();
     let prefix: String = chars.iter().take(6).collect();
-    let suffix: String = chars.iter().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
-    format!("{}...{}", prefix, suffix)
+    let suffix: String = chars
+        .iter()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{prefix}...{suffix}")
 }
 
 #[tauri::command]
-pub async fn delete_provider_credential(
-    provider_type: String,
-) -> Result<bool, AppError> {
+pub async fn delete_provider_credential(provider_type: String) -> Result<bool, AppError> {
     let cred_id = credentials::credential_id(&provider_type, "default");
     credentials::delete_credential(&cred_id, "api_key")?;
     Ok(true)
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC signature mirrors the frontend form fields 1:1
 pub async fn save_provider_config(
     provider_type: String,
     name: String,
@@ -170,10 +163,9 @@ pub async fn save_provider_config(
         "custom_headers": custom_headers,
     });
 
-    let config_str = serde_json::to_string_pretty(&config_data)
-        .map_err(|e| AppError::new(
-            codes::CONFIG_PARSE_ERROR, "序列化配置失败", "")
-            .with_details(e.to_string()))?;
+    let config_str = serde_json::to_string_pretty(&config_data).map_err(|e| {
+        AppError::new(codes::CONFIG_PARSE_ERROR, "序列化配置失败", "").with_details(e.to_string())
+    })?;
 
     crate::config::write_provider_config(&provider_type, &config_str)?;
 
@@ -182,11 +174,13 @@ pub async fn save_provider_config(
     let provider_config = crate::providers::ProviderConfig {
         provider_type: provider_type.clone(),
         name: name.clone(),
-        base_url: base_url.clone().unwrap_or_else(|| match provider_type.as_str() {
-            "anthropic" => "https://api.anthropic.com".to_string(),
-            "deepseek" => "https://api.deepseek.com/anthropic".to_string(),
-            _ => "https://api.anthropic.com".to_string(),
-        }),
+        base_url: base_url
+            .clone()
+            .unwrap_or_else(|| match provider_type.as_str() {
+                "anthropic" => "https://api.anthropic.com".to_string(),
+                "deepseek" => "https://api.deepseek.com/anthropic".to_string(),
+                _ => "https://api.anthropic.com".to_string(),
+            }),
         default_model: default_model.clone(),
         fast_model: fast_model.clone(),
         high_capability_model: high_capability_model.clone(),
@@ -204,21 +198,17 @@ pub async fn save_provider_config(
 
     let _ = adapter.apply_config(&provider_config).await;
 
-    log::info!("Provider config saved and applied for {}", provider_type);
+    log::info!("Provider config saved and applied for {provider_type}");
     Ok(true)
 }
 
 #[tauri::command]
-pub async fn load_provider_config(
-    provider_type: String,
-) -> Result<serde_json::Value, AppError> {
+pub async fn load_provider_config(provider_type: String) -> Result<serde_json::Value, AppError> {
     match crate::config::read_provider_config(&provider_type) {
-        Ok(Some(content)) => {
-            match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(val) => Ok(val),
-                Err(_) => Ok(serde_json::json!({})),
-            }
-        }
+        Ok(Some(content)) => match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(val) => Ok(val),
+            Err(_) => Ok(serde_json::json!({})),
+        },
         Ok(None) => Ok(serde_json::json!({})),
         Err(_) => Ok(serde_json::json!({})),
     }

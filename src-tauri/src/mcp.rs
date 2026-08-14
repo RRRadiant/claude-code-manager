@@ -1,7 +1,7 @@
 // Claude Code Manager - MCP server management
 // Discovery Layer: user → project → local, layered merge with dedup
 use crate::error::AppResult;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// MCP transport type
@@ -69,11 +69,10 @@ pub struct McpTestResult {
     pub suggestions: Vec<String>,
 }
 
-/// A discovered config source: (path, scope, label)
+/// A discovered config source: (path, scope)
 struct McpSource {
     path: PathBuf,
     scope: McpScope,
-    label: &'static str,
 }
 
 /// List all MCP servers by discovering and merging config sources.
@@ -89,7 +88,8 @@ pub fn list_servers() -> AppResult<Vec<McpServerDef>> {
         if let Ok(content) = std::fs::read_to_string(&src.path) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                 // Try both "mcpServers" (camelCase) and "mcp_servers" (snake_case) keys
-                let mcp_obj = json.get("mcpServers")
+                let mcp_obj = json
+                    .get("mcpServers")
                     .or_else(|| json.get("mcp_servers"))
                     .and_then(|v| v.as_object());
 
@@ -99,7 +99,7 @@ pub fn list_servers() -> AppResult<Vec<McpServerDef>> {
                         if servers.iter().any(|s: &McpServerDef| s.name == *name) {
                             continue;
                         }
-                        if let Some(server) = parse_mcp_entry(name, config, &src) {
+                        if let Some(server) = parse_mcp_entry(name, config, src) {
                             servers.push(server);
                         }
                     }
@@ -112,7 +112,7 @@ pub fn list_servers() -> AppResult<Vec<McpServerDef>> {
                                 if servers.iter().any(|s: &McpServerDef| s.name == *name) {
                                     continue;
                                 }
-                                if let Some(server) = parse_mcp_entry(name, config, &src) {
+                                if let Some(server) = parse_mcp_entry(name, config, src) {
                                     servers.push(server);
                                 }
                             }
@@ -122,9 +122,12 @@ pub fn list_servers() -> AppResult<Vec<McpServerDef>> {
 
                 // Also check if the root has "name" + "command" — single server format
                 if json.get("command").is_some() && json.get("name").is_some() {
-                    let name = json.get("name").and_then(|v| v.as_str()).unwrap_or("unnamed");
+                    let name = json
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unnamed");
                     if !servers.iter().any(|s| s.name == name) {
-                        if let Some(server) = parse_mcp_entry(name, &json, &src) {
+                        if let Some(server) = parse_mcp_entry(name, &json, src) {
                             servers.push(server);
                         }
                     }
@@ -151,43 +154,39 @@ fn discover_sources() -> Vec<McpSource> {
     sources.push(McpSource {
         path: claude_dir.join("settings.json"),
         scope: McpScope::User,
-        label: "settings.json (user)",
     });
 
     // %USERPROFILE%\.claude\claude.json — alternative user config
     sources.push(McpSource {
         path: claude_dir.join("claude.json"),
         scope: McpScope::User,
-        label: "claude.json (user)",
     });
 
     // %USERPROFILE%\.claude\mcp.json — standalone MCP config (Claude Code Desktop)
     sources.push(McpSource {
         path: claude_dir.join("mcp.json"),
         scope: McpScope::User,
-        label: "mcp.json (user)",
     });
 
     // %USERPROFILE%\.claude\settings.local.json — local user overrides
     sources.push(McpSource {
         path: claude_dir.join("settings.local.json"),
         scope: McpScope::User,
-        label: "settings.local.json (user)",
     });
 
     // %USERPROFILE%\.claude.json — Claude Code CLI user config (root-level single file)
     sources.push(McpSource {
         path: std::path::Path::new(&home).join(".claude.json"),
         scope: McpScope::User,
-        label: ".claude.json (user root)",
     });
 
     // %APPDATA%\Claude\claude_desktop_config.json — Claude Desktop app
     if !appdata.is_empty() {
         sources.push(McpSource {
-            path: std::path::Path::new(&appdata).join("Claude").join("claude_desktop_config.json"),
+            path: std::path::Path::new(&appdata)
+                .join("Claude")
+                .join("claude_desktop_config.json"),
             scope: McpScope::User,
-            label: "claude_desktop_config.json (Claude Desktop)",
         });
     }
 
@@ -196,21 +195,18 @@ fn discover_sources() -> Vec<McpSource> {
     sources.push(McpSource {
         path: PathBuf::from(".mcp.json"),
         scope: McpScope::Project,
-        label: ".mcp.json (project)",
     });
 
     // .claude/settings.json in project directory
     sources.push(McpSource {
         path: PathBuf::from(".claude").join("settings.json"),
         scope: McpScope::Project,
-        label: ".claude/settings.json (project)",
     });
 
     // .claude/mcp.json in project directory
     sources.push(McpSource {
         path: PathBuf::from(".claude").join("mcp.json"),
         scope: McpScope::Project,
-        label: ".claude/mcp.json (project)",
     });
 
     // ── Local scope (highest priority) ──
@@ -218,14 +214,20 @@ fn discover_sources() -> Vec<McpSource> {
     sources.push(McpSource {
         path: PathBuf::from(".claude").join("settings.local.json"),
         scope: McpScope::Local,
-        label: ".claude/settings.local.json (local)",
     });
 
     sources
 }
 
-fn parse_mcp_entry(name: &str, config: &serde_json::Value, src: &McpSource) -> Option<McpServerDef> {
-    let type_str = config.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
+fn parse_mcp_entry(
+    name: &str,
+    config: &serde_json::Value,
+    src: &McpSource,
+) -> Option<McpServerDef> {
+    let type_str = config
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("stdio");
     let type_ = match type_str {
         "http" | "sse" => McpTransportType::Http,
         _ => McpTransportType::Stdio,
@@ -234,14 +236,20 @@ fn parse_mcp_entry(name: &str, config: &serde_json::Value, src: &McpSource) -> O
     Some(McpServerDef {
         name: name.to_string(),
         type_,
-        command: config.get("command").and_then(|v| v.as_str()).map(String::from),
-        args: config.get("args").and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
+        command: config
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        args: config.get("args").and_then(|v| v.as_array()).map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        }),
         url: config.get("url").and_then(|v| v.as_str()).map(String::from),
         headers: None,
         env: None,
         cwd: config.get("cwd").and_then(|v| v.as_str()).map(String::from),
-        timeout_ms: config.get("timeoutMs").and_then(|v| v.as_u64()),
+        timeout_ms: config.get("timeoutMs").and_then(serde_json::Value::as_u64),
         tool_timeout_ms: None,
         scope: src.scope.clone(),
         enabled: true,
@@ -251,36 +259,52 @@ fn parse_mcp_entry(name: &str, config: &serde_json::Value, src: &McpSource) -> O
 
 /// Update an MCP server entry in its source file (atomic write with backup)
 pub fn update_server_config(
-    source_file: &str, name: &str,
+    source_file: &str,
+    name: &str,
     config_json: &serde_json::Value,
     original_name: Option<&str>,
 ) -> AppResult<()> {
     // SECURITY: confine writes to known MCP config locations
     let roots = crate::security::mcp_allowed_roots();
-    let root_refs: Vec<&std::path::Path> = roots.iter().map(|p| p.as_path()).collect();
+    let root_refs: Vec<&std::path::Path> = roots.iter().map(std::path::PathBuf::as_path).collect();
     let files = crate::security::mcp_allowed_files();
-    let file_refs: Vec<&std::path::Path> = files.iter().map(|p| p.as_path()).collect();
+    let file_refs: Vec<&std::path::Path> = files.iter().map(std::path::PathBuf::as_path).collect();
     let path = crate::security::sanitize_path(source_file, &root_refs, &file_refs)?;
-    let content = if path.exists() { std::fs::read_to_string(&path)? } else { "{}".to_string() };
+    let content = if path.exists() {
+        std::fs::read_to_string(&path)?
+    } else {
+        "{}".to_string()
+    };
 
-    let mut root: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| crate::error::AppError::new("CONFIG_PARSE_ERROR","JSON 格式无效","")
-            .with_details(e.to_string()))?;
-    if !root.is_object() { root = serde_json::json!({"mcpServers":{}}); }
+    let mut root: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+        crate::error::AppError::new("CONFIG_PARSE_ERROR", "JSON 格式无效", "")
+            .with_details(e.to_string())
+    })?;
+    if !root.is_object() {
+        root = serde_json::json!({"mcpServers":{}});
+    }
     if root.get("mcpServers").is_none() {
         if let Some(obj) = root.as_object_mut() {
             obj.insert("mcpServers".into(), serde_json::json!({}));
         }
     }
-    if let Some(orig) = original_name { if orig != name {
-        if let Some(o) = root.get_mut("mcpServers").and_then(|v|v.as_object_mut()) { o.remove(orig); }
-    }}
-    if let Some(o) = root.get_mut("mcpServers").and_then(|v|v.as_object_mut()) {
+    if let Some(orig) = original_name {
+        if orig != name {
+            if let Some(o) = root.get_mut("mcpServers").and_then(|v| v.as_object_mut()) {
+                o.remove(orig);
+            }
+        }
+    }
+    if let Some(o) = root.get_mut("mcpServers").and_then(|v| v.as_object_mut()) {
         o.insert(name.into(), config_json.clone());
     }
-    crate::config::write_config_inner(&path, &serde_json::to_string_pretty(&root).map_err(|e|
-        crate::error::AppError::new("WRITE_ERROR","序列化失败","").with_details(e.to_string()))?)?;
-    log::info!("MCP '{}' saved to {}", name, source_file);
+    crate::config::write_config_inner(
+        &path,
+        &serde_json::to_string_pretty(&root).map_err(|e| {
+            crate::error::AppError::new("WRITE_ERROR", "序列化失败", "").with_details(e.to_string())
+        })?,
+    )?;
+    log::info!("MCP '{name}' saved to {source_file}");
     Ok(())
 }
 
@@ -288,48 +312,68 @@ pub fn update_server_config(
 pub fn delete_server_config(source_file: &str, name: &str) -> AppResult<()> {
     // SECURITY: confine deletes to known MCP config locations
     let roots = crate::security::mcp_allowed_roots();
-    let root_refs: Vec<&std::path::Path> = roots.iter().map(|p| p.as_path()).collect();
+    let root_refs: Vec<&std::path::Path> = roots.iter().map(std::path::PathBuf::as_path).collect();
     let files = crate::security::mcp_allowed_files();
-    let file_refs: Vec<&std::path::Path> = files.iter().map(|p| p.as_path()).collect();
+    let file_refs: Vec<&std::path::Path> = files.iter().map(std::path::PathBuf::as_path).collect();
     let path = crate::security::sanitize_path(source_file, &root_refs, &file_refs)?;
-    if !path.exists() { return Ok(()); }
+    if !path.exists() {
+        return Ok(());
+    }
     let content = std::fs::read_to_string(&path)?;
-    let mut root: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| crate::error::AppError::new("CONFIG_PARSE_ERROR","JSON 格式无效","")
-            .with_details(e.to_string()))?;
-    if let Some(o) = root.get_mut("mcpServers").and_then(|v|v.as_object_mut()) { o.remove(name); }
-    crate::config::write_config_inner(&path, &serde_json::to_string_pretty(&root).map_err(|e|
-        crate::error::AppError::new("WRITE_ERROR","序列化失败","").with_details(e.to_string()))?)?;
-    log::info!("MCP '{}' deleted", name);
+    let mut root: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+        crate::error::AppError::new("CONFIG_PARSE_ERROR", "JSON 格式无效", "")
+            .with_details(e.to_string())
+    })?;
+    if let Some(o) = root.get_mut("mcpServers").and_then(|v| v.as_object_mut()) {
+        o.remove(name);
+    }
+    crate::config::write_config_inner(
+        &path,
+        &serde_json::to_string_pretty(&root).map_err(|e| {
+            crate::error::AppError::new("WRITE_ERROR", "序列化失败", "").with_details(e.to_string())
+        })?,
+    )?;
+    log::info!("MCP '{name}' deleted");
     Ok(())
 }
 
 /// Test a stdio MCP server by starting it and performing a real initialization handshake
 pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use std::time::{Duration, Instant};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let start = Instant::now();
 
     let command = match &def.command {
         Some(cmd) => cmd,
-        None => return McpTestResult {
-            success: false, protocol_version: None, server_name: None,
-            server_version: None, tool_count: None, tool_names: vec![],
-            response_time_ms: start.elapsed().as_millis() as u64,
-            stdout_summary: None, stderr_summary: None,
-            suggestions: vec!["MCP 服务器未指定 command。".to_string()],
-        },
+        None => {
+            return McpTestResult {
+                success: false,
+                protocol_version: None,
+                server_name: None,
+                server_version: None,
+                tool_count: None,
+                tool_names: vec![],
+                response_time_ms: start.elapsed().as_millis() as u64,
+                stdout_summary: None,
+                stderr_summary: None,
+                suggestions: vec!["MCP 服务器未指定 command。".to_string()],
+            }
+        }
     };
 
     // SECURITY: validate command before spawning (defends against malicious
     // config entries discovered by list_servers, which bypass the IPC layer).
     if let Err(e) = crate::security::validate_mcp_command(command) {
         return McpTestResult {
-            success: false, protocol_version: None, server_name: None,
-            server_version: None, tool_count: None, tool_names: vec![],
+            success: false,
+            protocol_version: None,
+            server_name: None,
+            server_version: None,
+            tool_count: None,
+            tool_names: vec![],
             response_time_ms: start.elapsed().as_millis() as u64,
-            stdout_summary: Some(format!("命令校验失败: {}", e)),
+            stdout_summary: Some(format!("命令校验失败: {e}")),
             stderr_summary: None,
             suggestions: vec!["命令包含非法字符或路径穿越，已拒绝执行。".to_string()],
         };
@@ -344,14 +388,20 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
         .spawn()
     {
         Ok(c) => c,
-        Err(e) => return McpTestResult {
-            success: false, protocol_version: None, server_name: None,
-            server_version: None, tool_count: None, tool_names: vec![],
-            response_time_ms: start.elapsed().as_millis() as u64,
-            stdout_summary: Some(format!("启动失败: {}", e)),
-            stderr_summary: None,
-            suggestions: vec![format!("请检查 command '{}' 是否存在/可执行。", command)],
-        },
+        Err(e) => {
+            return McpTestResult {
+                success: false,
+                protocol_version: None,
+                server_name: None,
+                server_version: None,
+                tool_count: None,
+                tool_names: vec![],
+                response_time_ms: start.elapsed().as_millis() as u64,
+                stdout_summary: Some(format!("启动失败: {e}")),
+                stderr_summary: None,
+                suggestions: vec![format!("请检查 command '{}' 是否存在/可执行。", command)],
+            }
+        }
     };
 
     // SAFETY: stdin/stdout/stderr were configured as `Stdio::piped()` above, so
@@ -361,7 +411,7 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let reader = BufReader::new(stdout);
-    let mut stderr_reader = BufReader::new(stderr);
+    let stderr_reader = BufReader::new(stderr);
     let mut lines = reader.lines();
 
     // Send initialize request
@@ -385,10 +435,14 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
     if let Err(e) = writer.write_all(init_str.as_bytes()).await {
         let _ = child.kill().await;
         return McpTestResult {
-            success: false, protocol_version: None, server_name: None,
-            server_version: None, tool_count: None, tool_names: vec![],
+            success: false,
+            protocol_version: None,
+            server_name: None,
+            server_version: None,
+            tool_count: None,
+            tool_names: vec![],
             response_time_ms: start.elapsed().as_millis() as u64,
-            stdout_summary: Some(format!("写入 stdin 失败: {}", e)),
+            stdout_summary: Some(format!("写入 stdin 失败: {e}")),
             stderr_summary: None,
             suggestions: vec!["检查 MCP 服务器进程是否可接收输入。".to_string()],
         };
@@ -414,14 +468,15 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
                             }
                         }
                         Ok(None) => break,
-                        Err(e) => return Err(format!("读取错误: {}", e)),
+                        Err(e) => return Err(format!("读取错误: {e}")),
                     }
                 }
-                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                () = tokio::time::sleep(Duration::from_millis(50)) => {}
             }
         }
         Ok(response_lines)
-    }).await;
+    })
+    .await;
 
     // Collect stderr summary
     let mut stderr_lines = Vec::new();
@@ -430,7 +485,8 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
         while let Ok(Some(line)) = err_lines.next_line().await {
             stderr_lines.push(line);
         }
-    }).await;
+    })
+    .await;
 
     // Cleanup
     let _ = child.kill().await;
@@ -442,10 +498,19 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
             let response_text = response_lines.join("\n");
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response_text) {
                 if let Some(result) = parsed.get("result") {
-                    let protocol = result.get("protocolVersion").and_then(|v| v.as_str()).map(String::from);
+                    let protocol = result
+                        .get("protocolVersion")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                     let server_info = result.get("serverInfo");
-                    let s_name = server_info.and_then(|i| i.get("name")).and_then(|v| v.as_str()).map(String::from);
-                    let s_ver = server_info.and_then(|i| i.get("version")).and_then(|v| v.as_str()).map(String::from);
+                    let s_name = server_info
+                        .and_then(|i| i.get("name"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    let s_ver = server_info
+                        .and_then(|i| i.get("version"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
 
                     // Report capabilities
                     let mut tool_names = Vec::new();
@@ -464,32 +529,48 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
                         tool_names,
                         response_time_ms: elapsed_ms,
                         stdout_summary: Some(response_text.chars().take(200).collect()),
-                        stderr_summary: if stderr_lines.is_empty() { None } else {
+                        stderr_summary: if stderr_lines.is_empty() {
+                            None
+                        } else {
                             Some(stderr_lines.join("\n").chars().take(200).collect())
                         },
-                        suggestions: if stderr_lines.is_empty() { vec![] } else {
+                        suggestions: if stderr_lines.is_empty() {
+                            vec![]
+                        } else {
                             vec!["stderr 中有输出，可能是非致命警告。".to_string()]
                         },
                     };
                 }
             }
             McpTestResult {
-                success: false, protocol_version: None, server_name: None,
-                server_version: None, tool_count: None, tool_names: vec![],
+                success: false,
+                protocol_version: None,
+                server_name: None,
+                server_version: None,
+                tool_count: None,
+                tool_names: vec![],
                 response_time_ms: elapsed_ms,
                 stdout_summary: Some(response_text.chars().take(200).collect()),
-                stderr_summary: if stderr_lines.is_empty() { None } else {
+                stderr_summary: if stderr_lines.is_empty() {
+                    None
+                } else {
                     Some(stderr_lines.join("\n").chars().take(200).collect())
                 },
                 suggestions: vec!["MCP 服务器未能正确响应 initialize 请求。".to_string()],
             }
         }
         _ => McpTestResult {
-            success: false, protocol_version: None, server_name: None,
-            server_version: None, tool_count: None, tool_names: vec![],
+            success: false,
+            protocol_version: None,
+            server_name: None,
+            server_version: None,
+            tool_count: None,
+            tool_names: vec![],
             response_time_ms: elapsed_ms,
             stdout_summary: None,
-            stderr_summary: if stderr_lines.is_empty() { None } else {
+            stderr_summary: if stderr_lines.is_empty() {
+                None
+            } else {
                 Some(stderr_lines.join("\n").chars().take(200).collect())
             },
             suggestions: vec!["MCP 服务器未在超时时间内响应。".to_string()],
@@ -505,13 +586,20 @@ pub async fn test_http_server(def: &McpServerDef) -> McpTestResult {
 
     let url = match &def.url {
         Some(u) => u.trim_end_matches('/').to_string(),
-        None => return McpTestResult {
-            success: false, protocol_version: None, server_name: None,
-            server_version: None, tool_count: None, tool_names: vec![],
-            response_time_ms: start.elapsed().as_millis() as u64,
-            stdout_summary: None, stderr_summary: None,
-            suggestions: vec!["HTTP MCP 未指定 URL。".to_string()],
-        },
+        None => {
+            return McpTestResult {
+                success: false,
+                protocol_version: None,
+                server_name: None,
+                server_version: None,
+                tool_count: None,
+                tool_names: vec![],
+                response_time_ms: start.elapsed().as_millis() as u64,
+                stdout_summary: None,
+                stderr_summary: None,
+                suggestions: vec!["HTTP MCP 未指定 URL。".to_string()],
+            }
+        }
     };
 
     let client = match reqwest::Client::builder()
@@ -520,13 +608,20 @@ pub async fn test_http_server(def: &McpServerDef) -> McpTestResult {
         .build()
     {
         Ok(c) => c,
-        Err(e) => return McpTestResult {
-            success: false, protocol_version: None, server_name: None,
-            server_version: None, tool_count: None, tool_names: vec![],
-            response_time_ms: start.elapsed().as_millis() as u64,
-            stdout_summary: None, stderr_summary: None,
-            suggestions: vec![format!("HTTP 客户端初始化失败: {}", e)],
-        },
+        Err(e) => {
+            return McpTestResult {
+                success: false,
+                protocol_version: None,
+                server_name: None,
+                server_version: None,
+                tool_count: None,
+                tool_names: vec![],
+                response_time_ms: start.elapsed().as_millis() as u64,
+                stdout_summary: None,
+                stderr_summary: None,
+                suggestions: vec![format!("HTTP 客户端初始化失败: {}", e)],
+            }
+        }
     };
 
     let init_payload = serde_json::json!({
@@ -540,7 +635,7 @@ pub async fn test_http_server(def: &McpServerDef) -> McpTestResult {
         }
     });
 
-    let mcp_url = format!("{}/v1/mcp", url);
+    let mcp_url = format!("{url}/v1/mcp");
     match client.post(&mcp_url).json(&init_payload).send().await {
         Ok(resp) => {
             let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -550,26 +645,39 @@ pub async fn test_http_server(def: &McpServerDef) -> McpTestResult {
                 match resp.json::<serde_json::Value>().await {
                     Ok(json) => {
                         if let Some(result) = json.get("result") {
-                            let protocol = result.get("protocolVersion")
-                                .and_then(|v| v.as_str()).map(String::from);
+                            let protocol = result
+                                .get("protocolVersion")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
                             let server_info = result.get("serverInfo");
-                            let s_name = server_info.and_then(|i| i.get("name"))
-                                .and_then(|v| v.as_str()).map(String::from);
-                            let s_ver = server_info.and_then(|i| i.get("version"))
-                                .and_then(|v| v.as_str()).map(String::from);
+                            let s_name = server_info
+                                .and_then(|i| i.get("name"))
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            let s_ver = server_info
+                                .and_then(|i| i.get("version"))
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
                             return McpTestResult {
-                                success: true, protocol_version: protocol,
-                                server_name: s_name, server_version: s_ver,
-                                tool_count: None, tool_names: vec![],
+                                success: true,
+                                protocol_version: protocol,
+                                server_name: s_name,
+                                server_version: s_ver,
+                                tool_count: None,
+                                tool_names: vec![],
                                 response_time_ms: elapsed_ms,
-                                stdout_summary: None, stderr_summary: None,
+                                stdout_summary: None,
+                                stderr_summary: None,
                                 suggestions: vec![],
                             };
                         }
                         McpTestResult {
-                            success: false, protocol_version: None,
-                            server_name: None, server_version: None,
-                            tool_count: None, tool_names: vec![],
+                            success: false,
+                            protocol_version: None,
+                            server_name: None,
+                            server_version: None,
+                            tool_count: None,
+                            tool_names: vec![],
                             response_time_ms: elapsed_ms,
                             stdout_summary: Some(json.to_string().chars().take(200).collect()),
                             stderr_summary: None,
@@ -577,34 +685,46 @@ pub async fn test_http_server(def: &McpServerDef) -> McpTestResult {
                         }
                     }
                     Err(e) => McpTestResult {
-                        success: false, protocol_version: None,
-                        server_name: None, server_version: None,
-                        tool_count: None, tool_names: vec![],
+                        success: false,
+                        protocol_version: None,
+                        server_name: None,
+                        server_version: None,
+                        tool_count: None,
+                        tool_names: vec![],
                         response_time_ms: elapsed_ms,
-                        stdout_summary: Some(format!("JSON 解析错误: {}", e)),
+                        stdout_summary: Some(format!("JSON 解析错误: {e}")),
                         stderr_summary: None,
                         suggestions: vec!["服务器返回了非 JSON 响应。".to_string()],
-                    }
+                    },
                 }
             } else if status.as_u16() == 401 || status.as_u16() == 403 {
                 suggestions.push("可能需要 OAuth 或 API Token。".to_string());
                 McpTestResult {
-                    success: false, protocol_version: None,
-                    server_name: None, server_version: None,
-                    tool_count: None, tool_names: vec![],
+                    success: false,
+                    protocol_version: None,
+                    server_name: None,
+                    server_version: None,
+                    tool_count: None,
+                    tool_names: vec![],
                     response_time_ms: elapsed_ms,
-                    stdout_summary: Some(format!("HTTP {}", status)),
+                    stdout_summary: Some(format!("HTTP {status}")),
                     stderr_summary: None,
                     suggestions,
                 }
             } else {
-                suggestions.push(format!("服务器返回 HTTP {}，请检查 URL 和配置。", status.as_u16()));
+                suggestions.push(format!(
+                    "服务器返回 HTTP {}，请检查 URL 和配置。",
+                    status.as_u16()
+                ));
                 McpTestResult {
-                    success: false, protocol_version: None,
-                    server_name: None, server_version: None,
-                    tool_count: None, tool_names: vec![],
+                    success: false,
+                    protocol_version: None,
+                    server_name: None,
+                    server_version: None,
+                    tool_count: None,
+                    tool_names: vec![],
                     response_time_ms: elapsed_ms,
-                    stdout_summary: Some(format!("HTTP {}", status)),
+                    stdout_summary: Some(format!("HTTP {status}")),
                     stderr_summary: None,
                     suggestions,
                 }
@@ -620,9 +740,12 @@ pub async fn test_http_server(def: &McpServerDef) -> McpTestResult {
                 suggestions.push("TLS 错误，请检查证书。".to_string());
             }
             McpTestResult {
-                success: false, protocol_version: None,
-                server_name: None, server_version: None,
-                tool_count: None, tool_names: vec![],
+                success: false,
+                protocol_version: None,
+                server_name: None,
+                server_version: None,
+                tool_count: None,
+                tool_names: vec![],
                 response_time_ms: elapsed_ms,
                 stdout_summary: Some(e.to_string().chars().take(200).collect()),
                 stderr_summary: None,

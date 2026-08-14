@@ -55,7 +55,7 @@ impl LogSanitizer {
 
     /// Sanitize the user's home directory path to %USERPROFILE%
     pub fn sanitize_path(&self, path: &str) -> String {
-        if let Some(home) = std::env::var("USERPROFILE").ok() {
+        if let Ok(home) = std::env::var("USERPROFILE") {
             path.replace(&home, "%USERPROFILE%")
         } else {
             path.to_string()
@@ -65,8 +65,8 @@ impl LogSanitizer {
     /// Sanitize a log message (path + secrets)
     pub fn sanitize_log(&self, message: &str) -> String {
         let s = self.sanitize(message);
-        let s = self.sanitize_path(&s.to_string());
-        s
+
+        self.sanitize_path(&s.to_string())
     }
 }
 
@@ -109,7 +109,9 @@ mod tests {
         let sanitizer = LogSanitizer::new();
         let result = sanitizer.sanitize("Authorization: Bearer my-secret-token-12345");
         assert!(!result.to_string().contains("my-secret-token-12345"));
-        assert!(result.to_string().contains("Authorization: Bearer [REDACTED]"));
+        assert!(result
+            .to_string()
+            .contains("Authorization: Bearer [REDACTED]"));
     }
 
     #[test]

@@ -113,10 +113,10 @@ fn check_powershell() -> DiagCheckResult {
             "PowerShell 不可用".to_string()
         },
         details: info.path.map(|p| p.to_string_lossy().to_string()),
-        fix_suggestion: if !info.available {
-            Some("PowerShell 是 Windows 自带组件，请检查系统完整性。".to_string())
-        } else {
+        fix_suggestion: if info.available {
             None
+        } else {
+            Some("PowerShell 是 Windows 自带组件，请检查系统完整性。".to_string())
         },
     }
 }
@@ -137,10 +137,10 @@ fn check_git() -> DiagCheckResult {
             "Git 未安装（可选）".to_string()
         },
         details: info.path.map(|p| p.to_string_lossy().to_string()),
-        fix_suggestion: if !info.installed {
-            Some("Claude Code 可以使用 Git 进行上下文管理。建议安装 git-scm.com。".to_string())
-        } else {
+        fix_suggestion: if info.installed {
             None
+        } else {
+            Some("Claude Code 可以使用 Git 进行上下文管理。建议安装 git-scm.com。".to_string())
         },
     }
 }
@@ -161,10 +161,10 @@ fn check_path() -> DiagCheckResult {
             "Claude Code 目录可能不在 PATH 中".to_string()
         },
         details: path_check.claude_bin_path,
-        fix_suggestion: if !path_check.claude_bin_in_path {
-            Some("将 %USERPROFILE%\\.local\\bin 添加到用户 PATH 环境变量。".to_string())
-        } else {
+        fix_suggestion: if path_check.claude_bin_in_path {
             None
+        } else {
+            Some("将 %USERPROFILE%\\.local\\bin 添加到用户 PATH 环境变量。".to_string())
         },
     }
 }
@@ -176,8 +176,6 @@ fn check_claude_code_installed() -> DiagCheckResult {
         DiagStatus::Error
     } else if health_status == "healthy" {
         DiagStatus::Pass
-    } else if health_status == "warning" {
-        DiagStatus::Warning
     } else {
         DiagStatus::Warning
     };
@@ -188,19 +186,22 @@ fn check_claude_code_installed() -> DiagCheckResult {
         status,
         message: if info.installed {
             let method = info.install_method.as_deref().unwrap_or("unknown");
-            format!("Claude Code 已安装 (来源: {})", method)
+            format!("Claude Code 已安装 (来源: {method})")
         } else {
             "Claude Code 未安装".to_string()
         },
         details: Some(format!(
             "路径: {} | 健康: {}",
-            info.path.as_deref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            info.path
+                .as_deref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
             health_status,
         )),
-        fix_suggestion: if !info.installed {
-            Some("请前往「安装与环境」页面一键安装 Claude Code。".to_string())
-        } else {
+        fix_suggestion: if info.installed {
             None
+        } else {
+            Some("请前往「安装与环境」页面一键安装 Claude Code。".to_string())
         },
     }
 }
@@ -218,7 +219,7 @@ fn check_claude_code_version() -> DiagCheckResult {
             DiagStatus::Skipped
         },
         message: if let Some(ref v) = info.version {
-            format!("Claude Code 版本: {}", v)
+            format!("Claude Code 版本: {v}")
         } else if info.installed {
             "安装可能不完整（无法获取版本）".to_string()
         } else {
@@ -245,10 +246,10 @@ fn check_webview2() -> DiagCheckResult {
             "WebView2 运行时未检测到".to_string()
         },
         details: None,
-        fix_suggestion: if !info.installed {
-            Some("WebView2 是应用必需的运行时，请从 Microsoft 官网安装。".to_string())
-        } else {
+        fix_suggestion: if info.installed {
             None
+        } else {
+            Some("WebView2 是应用必需的运行时，请从 Microsoft 官网安装。".to_string())
         },
     }
 }
@@ -264,9 +265,7 @@ fn check_permissions() -> DiagCheckResult {
         } else {
             "用户权限（正常）".to_string()
         },
-        details: Some(
-            "Claude Code Manager 大多数功能不需要管理员权限。".to_string(),
-        ),
+        details: Some("Claude Code Manager 大多数功能不需要管理员权限。".to_string()),
         fix_suggestion: None,
     }
 }
@@ -280,6 +279,9 @@ mod tests {
         let report = run_all_checks();
         assert!(report.total_checks > 0);
         // Some checks may pass or warn, but it shouldn't crash
-        println!("Diagnostics: {}/{} passed", report.passed, report.total_checks);
+        println!(
+            "Diagnostics: {}/{} passed",
+            report.passed, report.total_checks
+        );
     }
 }

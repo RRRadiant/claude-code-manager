@@ -1,6 +1,6 @@
 // Claude Code Manager - Configuration file management
-use crate::error::{AppError, codes, AppResult};
-use serde::{Serialize, Deserialize};
+use crate::error::{codes, AppError, AppResult};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Configuration file scope
@@ -72,13 +72,13 @@ fn get_config_path(scope: &ConfigScope) -> PathBuf {
             // Note: This needs to be parameterized per-project
             PathBuf::from(".claude").join("settings.json")
         }
-        ConfigScope::Local => {
-            PathBuf::from(".claude").join("settings.local.json")
-        }
+        ConfigScope::Local => PathBuf::from(".claude").join("settings.local.json"),
         ConfigScope::Managed => {
-            let prog_data = std::env::var("ALLUSERSPROFILE")
-                .unwrap_or_else(|_| "C:\\ProgramData".to_string());
-            PathBuf::from(&prog_data).join("ClaudeCode").join("managed-settings.json")
+            let prog_data =
+                std::env::var("ALLUSERSPROFILE").unwrap_or_else(|_| "C:\\ProgramData".to_string());
+            PathBuf::from(&prog_data)
+                .join("ClaudeCode")
+                .join("managed-settings.json")
         }
     }
 }
@@ -167,7 +167,7 @@ pub fn write_config_inner(path: &std::path::Path, content: &str) -> AppResult<()
             chrono::Utc::now().format("%Y%m%d%H%M%S")
         );
         std::fs::copy(path, &backup_path)?;
-        log::info!("Config backup created: {}", backup_path);
+        log::info!("Config backup created: {backup_path}");
     }
 
     // Write to temporary file then rename (atomic operation)
@@ -199,16 +199,16 @@ pub fn write_config_inner(path: &std::path::Path, content: &str) -> AppResult<()
 
 /// Get the path for a provider config file
 fn get_provider_config_path(provider_type: &str) -> PathBuf {
-    let app_data = std::env::var("APPDATA")
-        .unwrap_or_else(|_| {
-            std::env::var("USERPROFILE")
-                .unwrap_or_else(|_| "C:\\Users\\Default".to_string())
-                .to_string() + "\\AppData\\Roaming"
-        });
+    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| {
+        std::env::var("USERPROFILE")
+            .unwrap_or_else(|_| "C:\\Users\\Default".to_string())
+            .clone()
+            + "\\AppData\\Roaming"
+    });
     let mut p = PathBuf::from(&app_data);
     p.push("ClaudeCodeManager");
     p.push("providers");
-    p.push(format!("{}.json", provider_type));
+    p.push(format!("{provider_type}.json"));
     p
 }
 

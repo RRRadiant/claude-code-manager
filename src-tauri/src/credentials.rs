@@ -1,17 +1,5 @@
 // Claude Code Manager - Credential management (Windows Credential Manager)
-use crate::error::{AppError, codes, AppResult};
-use serde::{Serialize, Deserialize};
-
-/// Reference to a stored credential
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CredentialRef {
-    /// Service identifier (e.g., "ccm/anthropic/default")
-    pub id: String,
-    /// Display name for the credential
-    pub name: String,
-    /// When the credential was last updated
-    pub updated_at: Option<String>,
-}
+use crate::error::AppResult;
 
 /// Store an API key in the Windows Credential Manager
 pub fn store_credential(service: &str, account: &str, secret: &str) -> AppResult<()> {
@@ -19,7 +7,7 @@ pub fn store_credential(service: &str, account: &str, secret: &str) -> AppResult
     {
         let entry = keyring::Entry::new(service, account)?;
         entry.set_password(secret)?;
-        log::info!("Credential stored: service={}, account={}", service, account);
+        log::info!("Credential stored: service={service}, account={account}");
         Ok(())
     }
 
@@ -60,7 +48,7 @@ pub fn delete_credential(service: &str, account: &str) -> AppResult<()> {
     {
         let entry = keyring::Entry::new(service, account)?;
         entry.delete_credential()?;
-        log::info!("Credential deleted: service={}, account={}", service, account);
+        log::info!("Credential deleted: service={service}, account={account}");
         Ok(())
     }
 
@@ -76,7 +64,7 @@ pub fn delete_credential(service: &str, account: &str) -> AppResult<()> {
 
 /// Build a credential service name for a provider
 pub fn credential_id(provider_type: &str, name: &str) -> String {
-    format!("ccm/{}/{}", provider_type, name)
+    format!("ccm/{provider_type}/{name}")
 }
 
 #[cfg(test)]

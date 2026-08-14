@@ -1,9 +1,9 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::os::windows::process::CommandExt;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::process::CommandExt;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -52,9 +52,9 @@ fn main() {
                  或者将下载的 MicrosoftEdgeWebview2Setup.exe\n\
                  放在本程序同一目录下后重新运行。",
             )
-                .encode_wide()
-                .chain(std::iter::once(0))
-                .collect();
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
             unsafe {
                 windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
                     std::ptr::null_mut(),

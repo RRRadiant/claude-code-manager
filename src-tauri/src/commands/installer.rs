@@ -26,11 +26,14 @@ pub async fn run_claude() -> Result<String, AppError> {
         .args(["/c", "start", "Claude Code", "cmd", "/k", "claude"])
         .creation_flags(0x08000000) // CREATE_NO_WINDOW — outer cmd is just a launcher
         .spawn()
-        .map_err(|e| AppError::new(
-            crate::error::codes::INSTALL_DOWNLOAD_FAILED,
-            "启动 Claude Code 失败",
-            "无法在新终端启动 Claude Code。",
-        ).with_details(e.to_string()))?;
+        .map_err(|e| {
+            AppError::new(
+                crate::error::codes::INSTALL_DOWNLOAD_FAILED,
+                "启动 Claude Code 失败",
+                "无法在新终端启动 Claude Code。",
+            )
+            .with_details(e.to_string())
+        })?;
     log::info!("Claude Code launched in new terminal (pid={})", child.id());
     Ok("Claude Code 已在新的终端窗口中启动".to_string())
 }
@@ -71,7 +74,7 @@ pub async fn install_claude_code(
                 }
             }
             Err(e) => {
-                log::error!("Claude Code install failed: {}", e);
+                log::error!("Claude Code install failed: {e}");
                 state2.task_manager.fail_task(&tid, e.to_string(), &app);
             }
         }
@@ -97,20 +100,24 @@ pub async fn install_full_environment(
         match installer::run_full_install(&tid, &app).await {
             Ok(results) => {
                 let all_ok = results.iter().all(|r| r.success);
-                log::info!("Full install completed: {} steps, all_success={}", results.len(), all_ok);
+                log::info!(
+                    "Full install completed: {} steps, all_success={}",
+                    results.len(),
+                    all_ok
+                );
                 if all_ok {
                     state2.task_manager.succeed_task(&tid, &app);
                 } else {
                     // Partial failure — surface the first failing step's message.
-                    let msg = results.iter()
+                    let msg = results
+                        .iter()
                         .find(|r| !r.success)
-                        .map(|r| r.message.clone())
-                        .unwrap_or_else(|| "部分组件安装失败".to_string());
+                        .map_or_else(|| "部分组件安装失败".to_string(), |r| r.message.clone());
                     state2.task_manager.fail_task(&tid, msg, &app);
                 }
             }
             Err(e) => {
-                log::error!("Full install failed: {}", e);
+                log::error!("Full install failed: {e}");
                 state2.task_manager.fail_task(&tid, e.to_string(), &app);
             }
         }
@@ -143,7 +150,7 @@ pub async fn uninstall_claude_code(
                 }
             }
             Err(e) => {
-                log::error!("Claude Code uninstall failed: {}", e);
+                log::error!("Claude Code uninstall failed: {e}");
                 state2.task_manager.fail_task(&tid, e.to_string(), &app);
             }
         }
