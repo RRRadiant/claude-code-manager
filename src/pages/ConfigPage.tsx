@@ -1,86 +1,136 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import type { ConfigFileInfo } from '../types'
+import { listConfigFiles, readConfigFile, writeConfigFile, errorMessage } from '../services/tauri'
+import { GlassCard } from '../components/glass'
 
 export default function ConfigPage() {
   const [files, setFiles] = useState<ConfigFileInfo[]>([])
-  const [activeScope, setActiveScope] = useState<string | null>(null)
-  const [editorMode, setEditorMode] = useState<'form' | 'source'>('source')
-  const [sourceContent, setSourceContent] = useState('')
+  const [active, setActive] = useState<string | null>(null)
+  const [content, setContent] = useState('')
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    // TODO: Load from backend
-    setFiles([
-      { name: '用户全局配置', scope: 'user', path: '%USERPROFILE%\\.claude\\settings.json', exists: true, last_modified: null, is_valid: null, has_sensitive_fields: true },
-      { name: '项目共享配置', scope: 'project', path: '.claude\\settings.json', exists: false, last_modified: null, is_valid: null, has_sensitive_fields: false },
-      { name: '项目本地配置', scope: 'local', path: '.claude\\settings.local.json', exists: false, last_modified: null, is_valid: null, has_sensitive_fields: true },
-      { name: '企业托管配置', scope: 'managed', path: 'C:\\ProgramData\\ClaudeCode\\managed-settings.json', exists: false, last_modified: null, is_valid: null, has_sensitive_fields: false },
-    ])
-  }, [])
+  useEffect(() => { loadFiles() }, [])
 
-  const handleFileSelect = async (scope: string) => {
-    setActiveScope(scope)
-    setLoading(true)
-    // TODO: Read from backend
-    setSourceContent('{\n  // 配置文件内容\n}')
-    setLoading(false)
+  const loadFiles = async () => {
+    try { setFiles(await listConfigFiles()) } catch { /* noop */ }
   }
 
-  return (
-    <div className="page">
-      <div className="page-header">
-        <h1>配置文件</h1>
-      </div>
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; msg: string } | null>(null)
 
-      <div className="config-layout">
-        <div className="config-sidebar">
-          <h3>配置文件列表</h3>
-          <div className="file-list">
-            {files.map((f) => (
-              <button
-                key={f.scope}
-                className={`file-item ${activeScope === f.scope ? 'active' : ''}`}
-                onClick={() => handleFileSelect(f.scope)}
-              >
-                <span className="file-name">{f.name}</span>
-                <span className="file-path">{f.path}</span>
-                <span className={`file-status ${f.exists ? 'exists' : 'missing'}`}>
-                  {f.exists ? '存在' : '不存在'}
-                </span>
-              </button>
-            ))}
-          </div>
+  const handleSelect = async (scope: string) => {
+    setActive(scope); setLoading(true); setSaveMsg(null)
+    try {
+      const r = await readConfigFile(scope)
+      setContent(r?.content ?? '')
+    } catch { setContent('// 无法读取') }
+    finally { setLoading(false) }
+  }
+
+  const handleFormat = useCallback(() => {
+    setSaveMsg(null)
+    try {
+      const parsed = JSON.parse(content)
+      setContent(JSON.stringify(parsed, null, 2))
+    } catch {
+      setSaveMsg({ ok: false, msg: 'JSON 格式无效，无法格式化' })
+    }
+  }, [content])
+
+  const handleSave = useCallback(async () => {
+    if (!active) return
+    setSaving(true); setSaveMsg(null)
+    try {
+      // Validate JSON before saving
+      JSON.parse(content)
+      await writeConfigFile(active, content)
+      setSaveMsg({ ok: true, msg: '保存成功' })
+    } catch (e) {
+      setSaveMsg({ ok: false, msg: errorMessage(e) })
+    } finally {
+      setSaving(false)
+    }
+  }, [active, content])
+
+  return (
+    <div className="page" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 34px)' }}>
+      <h1 style={{ marginBottom: 'var(--s4)', flexShrink: 0 }}>配置文件</h1>
+
+      <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '220px 1fr', gap: 'var(--s2)' }}>
+        {/* Sidebar file list */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s0)', overflow: 'auto', minHeight: 0 }}>
+          {files.length === 0 && (
+            <GlassCard blur={6} tint="rgba(255,255,255,0.04)" style={{ padding: 'var(--s2)', textAlign: 'center' }}>
+              <span className="text-tertiary" style={{ fontSize: 'var(--text-sm)' }}>暂无配置</span>
+            </GlassCard>
+          )}
+          {files.map(f => (
+            <GlassCard
+              key={f.scope}
+              blur={active === f.scope ? 8 : 4}
+              tint={active === f.scope ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)'}
+              hover
+              compact
+              style={{
+                cursor: 'pointer', padding: 'var(--s2)',
+                border: active === f.scope ? '1px solid rgba(255,255,255,0.12)' : undefined,
+              }}
+              onClick={() => handleSelect(f.scope)}
+            >
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500 }}>{f.name}</div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginTop: 1 }}>
+                {f.exists ? '✓ 存在' : '— 不存在'}
+              </div>
+            </GlassCard>
+          ))}
         </div>
 
-        <div className="config-editor">
-          {activeScope ? (
+        {/* Editor — fills grid cell */}
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', borderRadius: 'var(--r4)', border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(10px)' }}>
+          {loading ? (
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span className="text-tertiary">加载中...</span>
+            </div>
+          ) : active ? (
             <>
-              <div className="editor-toolbar">
-                <div className="editor-tabs">
-                  <button className={`editor-tab ${editorMode === 'source' ? 'active' : ''}`} onClick={() => setEditorMode('source')}>源码</button>
-                  <button className={`editor-tab ${editorMode === 'form' ? 'active' : ''}`} onClick={() => setEditorMode('form')}>表单</button>
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: 'var(--s2) var(--s3)', borderBottom: '1px solid rgba(255,255,255,0.06)',
+                flexShrink: 0,
+              }}>
+                <span className="text-tertiary" style={{ fontSize: 'var(--text-sm)' }}>{active}</span>
+                <div style={{ display: 'flex', gap: 'var(--s0)' }}>
+                  <button className="btn btn-ghost" style={{ fontSize: 'var(--text-sm)', padding: '4px var(--s1)' }} onClick={handleFormat}>格式化</button>
+                  <button className="btn btn-ghost" style={{ fontSize: 'var(--text-sm)', padding: '4px var(--s1)' }} onClick={handleSave} disabled={saving}>
+                    {saving ? '保存中...' : '保存'}
+                  </button>
                 </div>
-                <div className="editor-actions">
-                  <button className="btn btn-small btn-ghost">格式化</button>
-                  <button className="btn btn-small btn-ghost">备份</button>
-                  <button className="btn btn-small btn-primary">保存</button>
+              </div>
+              {saveMsg && (
+                <div style={{
+                  padding: 'var(--s0) var(--s3)', fontSize: 'var(--text-xs)',
+                  borderBottom: '1px solid rgba(255,255,255,0.06)',
+                  color: saveMsg.ok ? 'var(--success)' : 'var(--error)',
+                }}>
+                  {saveMsg.ok ? '✓ ' : '✗ '}{saveMsg.msg}
                 </div>
-              </div>
-              <div className="editor-body">
-                <textarea
-                  className="editor-textarea"
-                  value={sourceContent}
-                  onChange={(e) => setSourceContent(e.target.value)}
-                  spellCheck={false}
-                />
-              </div>
-              <div className="editor-footer">
-                <span className="text-secondary">JSON 格式 · 保存前自动备份</span>
-              </div>
+              )}
+              <textarea
+                value={content}
+                onChange={e => setContent(e.target.value)}
+                spellCheck={false}
+                style={{
+                  flex: 1, minHeight: 0, border: 'none', resize: 'none', outline: 'none',
+                  padding: 'var(--s3)',
+                  fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)',
+                  background: 'transparent', color: 'var(--text-primary)',
+                  lineHeight: 1.6,
+                }}
+              />
             </>
           ) : (
-            <div className="editor-empty">
-              <p className="text-secondary">选择左侧配置文件进行编辑</p>
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span className="text-tertiary">选择一个配置文件</span>
             </div>
           )}
         </div>

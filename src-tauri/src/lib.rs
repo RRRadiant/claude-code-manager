@@ -6,22 +6,19 @@ mod commands;
 mod config;
 mod credentials;
 mod diagnostics;
-mod environment;
+mod env_refresh;
+pub mod environment;
 mod error;
 mod impl_providers;
 mod installer;
 mod logging;
 mod mcp;
-mod model_detection;
 mod process;
 mod providers;
 mod security;
 mod task;
-mod updater;
 
-use error::AppError;
 use logging::LogSanitizer;
-use tauri::Manager;
 
 /// Application state shared across commands
 pub struct AppState {
@@ -48,10 +45,6 @@ pub fn run() {
                 )?;
             }
 
-            // Initialize updater plugin
-            #[cfg(not(debug_assertions))]
-            app.handle().plugin(tauri_plugin_updater::Builder::default().build())?;
-
             log::info!("Claude Code Manager started");
 
             Ok(())
@@ -60,6 +53,8 @@ pub fn run() {
             // Environment commands
             commands::environment::detect_environment,
             commands::environment::check_path,
+            commands::environment::refresh_environment,
+            commands::environment::detect_node_detailed,
             // Task commands
             commands::task::get_tasks,
             commands::task::cancel_task,
@@ -73,13 +68,25 @@ pub fn run() {
             // Provider commands
             commands::providers::test_provider_connection,
             commands::providers::detect_provider_models,
+            commands::providers::save_provider_credential,
+            commands::providers::get_provider_credential,
+            commands::providers::delete_provider_credential,
+            commands::providers::save_provider_config,
+            commands::providers::load_provider_config,
             // MCP commands
             commands::mcp::list_mcp_servers,
             commands::mcp::test_mcp_server,
+            commands::mcp::update_mcp_server,
+            commands::mcp::delete_mcp_server,
             commands::mcp::test_raw_mcp_stdio,
             // Installer commands
+            commands::installer::generate_install_plan,
+            commands::installer::detect_node_js,
+            commands::installer::run_claude,
             commands::installer::install_claude_code,
+            commands::installer::install_full_environment,
             commands::installer::uninstall_claude_code,
+            commands::installer::restart_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Claude Code Manager");

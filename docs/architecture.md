@@ -8,13 +8,12 @@
 ## 1. Project Overview
 
 **Claude Code Manager (CCM)** is a Windows desktop application that provides:
-- One-click Claude Code installation, repair, upgrade, and uninstall
+- One-click Claude Code installation and uninstall
 - Visual Claude Code configuration management
 - API provider configuration (Anthropic, DeepSeek, custom)
 - Model detection and selection
 - MCP server management
 - Environment diagnostics and troubleshooting
-- Self-update capability
 
 **Target users:** Windows users new to Claude Code, AI agents, and MCP who prefer graphical interfaces over terminal commands.
 
@@ -112,7 +111,6 @@
 | `config/` | Read/write/backup settings files | `ConfigFile`, `ConfigScope` |
 | `mcp/` | MCP server management & testing | `McpServer`, `McpTestResult` |
 | `credentials/` | Windows Credential Manager wrapper | `CredentialEntry` |
-| `updater/` | Self-update & Claude Code update | `UpdateManifest`, `UpdateState` |
 | `process/` | Safe command execution | `CommandSpec`, `ProcessOutput` |
 | `security/` | Path sanitization, validation, audit | — |
 | `diagnostics/` | System health checks | `DiagCheck`, `DiagReport` |
@@ -263,35 +261,13 @@ Each step allows "Skip" and "Do this later". User can return to onboarding from 
 
 ## 8. Update System Architecture
 
-### Claude Code Updates
-- Detect installation method (native/WinGet/npm)
-- Use corresponding update mechanism
-- Show current → latest version diff
-- Do NOT re-download the installer — let Claude Code's built-in update handle it
-- Exception: re-run installer if binary is corrupted
+> **当前状态：未实现。** 应用自身的自动更新功能尚未接入。
+> Claude Code 自身内置更新机制（终端 `claude update`），CCM 不重复实现。
+> 如需升级 CCM，请手动关注项目 Release。
 
-### Self-Update (Portable Mode)
-```
-1. Download new version + .sig + SHA-256 to temp dir
-2. Verify signature against embedded public key
-3. Verify SHA-256 hash
-4. Spawn update-helper.exe (embedded resource, extracted to temp)
-5. Main process exits
-6. Helper: copy new EXE over old one (retry on lock)
-7. Helper: launch new EXE
-8. Helper: self-cleanup
-9. New process cleans up temp files
-```
-
-### Self-Update (Installer Mode)
-```
-1. Download new .exe installer to temp dir
-2. Verify signature + SHA-256
-3. Spawn installer with silent-upgrade flags
-4. Main process exits
-5. Installer upgrades in-place
-6. Installer launches new version
-```
+本节为后续规划保留，待自动更新功能落地后补充：
+- 便携版：下载新版本 + 签名 + SHA-256 校验 → update-helper 替换 EXE
+- 安装版：下载安装包 + 校验 → 静默升级
 
 ---
 
@@ -376,8 +352,8 @@ Both architectures share the same codebase — only the build target differs.
 - Auto-fix for common issues
 - Diagnostic report (sanitized)
 - Claude Code update check
-- CCM self-update (portable + installer)
-- Update manifest generation
+- CCM self-update (portable + installer) — *暂未实现，见第 8 节*
+- Update manifest generation — *暂未实现*
 
 ### Phase 8: Polish & Release
 - Accessibility audit

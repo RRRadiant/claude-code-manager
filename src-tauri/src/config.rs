@@ -58,18 +58,27 @@ fn get_config_path(scope: &ConfigScope) -> PathBuf {
     match scope {
         ConfigScope::User => {
             let home = std::env::var("USERPROFILE")
-                .unwrap_or_else(|_| "C:\\Users\\Default".to_string());
-            PathBuf::from(format!("{}\\.claude\\settings.json", home))
+                .or_else(|_| std::env::var("HOME"))
+                .unwrap_or_else(|_| {
+                    // Fallback: use system temp directory as last resort
+                    std::env::var("TEMP").unwrap_or_else(|_| "C:\\Temp".to_string())
+                });
+            let mut p = PathBuf::from(&home);
+            p.push(".claude");
+            p.push("settings.json");
+            p
         }
         ConfigScope::Project => {
             // Note: This needs to be parameterized per-project
-            PathBuf::from(".claude\\settings.json")
+            PathBuf::from(".claude").join("settings.json")
         }
         ConfigScope::Local => {
-            PathBuf::from(".claude\\settings.local.json")
+            PathBuf::from(".claude").join("settings.local.json")
         }
         ConfigScope::Managed => {
-            PathBuf::from("C:\\ProgramData\\ClaudeCode\\managed-settings.json")
+            let prog_data = std::env::var("ALLUSERSPROFILE")
+                .unwrap_or_else(|_| "C:\\ProgramData".to_string());
+            PathBuf::from(&prog_data).join("ClaudeCode").join("managed-settings.json")
         }
     }
 }
@@ -186,6 +195,43 @@ pub fn write_config_inner(path: &std::path::Path, content: &str) -> AppResult<()
 
     log::info!("Config written: {}", path.to_string_lossy());
     Ok(())
+}
+
+/// Get the path for a provider config file
+fn get_provider_config_path(provider_type: &str) -> PathBuf {
+    let app_data = std::env::var("APPDATA")
+        .unwrap_or_else(|_| {
+            std::env::var("USERPROFILE")
+                .unwrap_or_else(|_| "C:\\Users\\Default".to_string())
+                .to_string() + "\\AppData\\Roaming"
+        });
+    let mut p = PathBuf::from(&app_data);
+    p.push("ClaudeCodeManager");
+    p.push("providers");
+    p.push(format!("{}.json", provider_type));
+    p
+}
+
+/// Write a provider configuration to the app data directory
+pub fn write_provider_config(provider_type: &str, content: &str) -> AppResult<()> {
+    let path = get_provider_config_path(provider_type);
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, content)?;
+    log::info!("Provider config written: {}", path.to_string_lossy());
+    Ok(())
+}
+
+/// Read a provider configuration from the app data directory
+pub fn read_provider_config(provider_type: &str) -> AppResult<Option<String>> {
+    let path = get_provider_config_path(provider_type);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)?;
+    Ok(Some(content))
 }
 
 #[cfg(test)]

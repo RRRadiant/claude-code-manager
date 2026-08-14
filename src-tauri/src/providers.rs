@@ -23,6 +23,9 @@ pub struct ProviderConfig {
     pub timeout_secs: u64,
     pub credential_id: Option<String>,
     pub custom_headers: Option<Vec<(String, String)>>,
+    /// API key passed directly (bypasses credential manager lookup)
+    #[serde(default, skip_serializing)]
+    pub api_key_override: Option<String>,
 }
 
 /// Model information from detection

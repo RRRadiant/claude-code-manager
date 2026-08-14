@@ -1,6 +1,8 @@
 // Claude Code Manager - MCP server management
+// Discovery Layer: user → project → local, layered merge with dedup
 use crate::error::AppResult;
 use serde::{Serialize, Deserialize};
+use std::path::PathBuf;
 
 /// MCP transport type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -48,6 +50,8 @@ pub struct McpServerDef {
     pub tool_timeout_ms: Option<u64>,
     pub scope: McpScope,
     pub enabled: bool,
+    /// Source file path (for diagnostics / UX)
+    pub source_file: Option<String>,
 }
 
 /// MCP test connection result
@@ -65,48 +69,165 @@ pub struct McpTestResult {
     pub suggestions: Vec<String>,
 }
 
-/// List all MCP servers from all scopes
-pub fn list_servers() -> AppResult<Vec<McpServerDef>> {
-    let mut servers = Vec::new();
+/// A discovered config source: (path, scope, label)
+struct McpSource {
+    path: PathBuf,
+    scope: McpScope,
+    label: &'static str,
+}
 
-    // Read from user-level ~/.claude/settings.json
-    let home = std::env::var("USERPROFILE").unwrap_or_default();
-    let user_settings = std::path::Path::new(&home).join(".claude").join("settings.json");
-    if let Ok(content) = std::fs::read_to_string(&user_settings) {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(mcp) = json.get("mcpServers").and_then(|v| v.as_object()) {
-                for (name, config) in mcp {
-                    if let Some(server) = parse_mcp_entry(name, config, McpScope::User) {
-                        servers.push(server);
+/// List all MCP servers by discovering and merging config sources.
+/// Layered merge rule: User < Project < Local (later scope overrides earlier)
+pub fn list_servers() -> AppResult<Vec<McpServerDef>> {
+    let sources = discover_sources();
+    let mut servers: Vec<McpServerDef> = Vec::new();
+
+    for src in &sources {
+        if !src.path.exists() {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&src.path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                // Try both "mcpServers" (camelCase) and "mcp_servers" (snake_case) keys
+                let mcp_obj = json.get("mcpServers")
+                    .or_else(|| json.get("mcp_servers"))
+                    .and_then(|v| v.as_object());
+
+                if let Some(obj) = mcp_obj {
+                    for (name, config) in obj {
+                        // Skip if already discovered from a higher-priority scope
+                        if servers.iter().any(|s: &McpServerDef| s.name == *name) {
+                            continue;
+                        }
+                        if let Some(server) = parse_mcp_entry(name, config, &src) {
+                            servers.push(server);
+                        }
                     }
                 }
-            }
-        }
-    }
+                // Also scan projects.*.mcpServers (Claude Code project-scoped MCP config)
+                if let Some(projects) = json.get("projects").and_then(|v| v.as_object()) {
+                    for (_proj_path, proj_cfg) in projects {
+                        if let Some(p_ms) = proj_cfg.get("mcpServers").and_then(|v| v.as_object()) {
+                            for (name, config) in p_ms {
+                                if servers.iter().any(|s: &McpServerDef| s.name == *name) {
+                                    continue;
+                                }
+                                if let Some(server) = parse_mcp_entry(name, config, &src) {
+                                    servers.push(server);
+                                }
+                            }
+                        }
+                    }
+                }
 
-    // Read from project .mcp.json (relative to cwd)
-    let project_mcp = std::path::Path::new(".mcp.json");
-    if project_mcp.exists() {
-        if let Ok(content) = std::fs::read_to_string(project_mcp) {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(mcp) = json.get("mcpServers").and_then(|v| v.as_object()) {
-                    for (name, config) in mcp {
-                        if let Some(server) = parse_mcp_entry(name, config, McpScope::Project) {
+                // Also check if the root has "name" + "command" — single server format
+                if json.get("command").is_some() && json.get("name").is_some() {
+                    let name = json.get("name").and_then(|v| v.as_str()).unwrap_or("unnamed");
+                    if !servers.iter().any(|s| s.name == name) {
+                        if let Some(server) = parse_mcp_entry(name, &json, &src) {
                             servers.push(server);
                         }
                     }
                 }
             }
+            // If JSON parsing fails, skip silently (malformed file)
         }
     }
 
     Ok(servers)
 }
 
-fn parse_mcp_entry(name: &str, config: &serde_json::Value, scope: McpScope) -> Option<McpServerDef> {
+/// Discover all config sources across scopes
+fn discover_sources() -> Vec<McpSource> {
+    let home = std::env::var("USERPROFILE").unwrap_or_default();
+    let appdata = std::env::var("APPDATA").unwrap_or_default();
+
+    let mut sources = Vec::new();
+
+    // ── User scope (lowest priority) ──
+    let claude_dir = std::path::Path::new(&home).join(".claude");
+
+    // %USERPROFILE%\.claude\settings.json — primary user config
+    sources.push(McpSource {
+        path: claude_dir.join("settings.json"),
+        scope: McpScope::User,
+        label: "settings.json (user)",
+    });
+
+    // %USERPROFILE%\.claude\claude.json — alternative user config
+    sources.push(McpSource {
+        path: claude_dir.join("claude.json"),
+        scope: McpScope::User,
+        label: "claude.json (user)",
+    });
+
+    // %USERPROFILE%\.claude\mcp.json — standalone MCP config (Claude Code Desktop)
+    sources.push(McpSource {
+        path: claude_dir.join("mcp.json"),
+        scope: McpScope::User,
+        label: "mcp.json (user)",
+    });
+
+    // %USERPROFILE%\.claude\settings.local.json — local user overrides
+    sources.push(McpSource {
+        path: claude_dir.join("settings.local.json"),
+        scope: McpScope::User,
+        label: "settings.local.json (user)",
+    });
+
+    // %USERPROFILE%\.claude.json — Claude Code CLI user config (root-level single file)
+    sources.push(McpSource {
+        path: std::path::Path::new(&home).join(".claude.json"),
+        scope: McpScope::User,
+        label: ".claude.json (user root)",
+    });
+
+    // %APPDATA%\Claude\claude_desktop_config.json — Claude Desktop app
+    if !appdata.is_empty() {
+        sources.push(McpSource {
+            path: std::path::Path::new(&appdata).join("Claude").join("claude_desktop_config.json"),
+            scope: McpScope::User,
+            label: "claude_desktop_config.json (Claude Desktop)",
+        });
+    }
+
+    // ── Project scope (medium priority) ──
+    // .mcp.json in current working directory
+    sources.push(McpSource {
+        path: PathBuf::from(".mcp.json"),
+        scope: McpScope::Project,
+        label: ".mcp.json (project)",
+    });
+
+    // .claude/settings.json in project directory
+    sources.push(McpSource {
+        path: PathBuf::from(".claude").join("settings.json"),
+        scope: McpScope::Project,
+        label: ".claude/settings.json (project)",
+    });
+
+    // .claude/mcp.json in project directory
+    sources.push(McpSource {
+        path: PathBuf::from(".claude").join("mcp.json"),
+        scope: McpScope::Project,
+        label: ".claude/mcp.json (project)",
+    });
+
+    // ── Local scope (highest priority) ──
+    // .claude/settings.local.json in project directory
+    sources.push(McpSource {
+        path: PathBuf::from(".claude").join("settings.local.json"),
+        scope: McpScope::Local,
+        label: ".claude/settings.local.json (local)",
+    });
+
+    sources
+}
+
+fn parse_mcp_entry(name: &str, config: &serde_json::Value, src: &McpSource) -> Option<McpServerDef> {
     let type_str = config.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
     let type_ = match type_str {
-        "http" => McpTransportType::Http,
+        "http" | "sse" => McpTransportType::Http,
         _ => McpTransportType::Stdio,
     };
 
@@ -122,20 +243,67 @@ fn parse_mcp_entry(name: &str, config: &serde_json::Value, scope: McpScope) -> O
         cwd: config.get("cwd").and_then(|v| v.as_str()).map(String::from),
         timeout_ms: config.get("timeoutMs").and_then(|v| v.as_u64()),
         tool_timeout_ms: None,
-        scope,
+        scope: src.scope.clone(),
         enabled: true,
+        source_file: Some(src.path.to_string_lossy().to_string()),
     })
+}
+
+/// Update an MCP server entry in its source file (atomic write with backup)
+pub fn update_server_config(
+    source_file: &str, name: &str,
+    config_json: &serde_json::Value,
+    original_name: Option<&str>,
+) -> AppResult<()> {
+    // SECURITY: confine writes to known MCP config locations
+    let roots = crate::security::mcp_allowed_roots();
+    let root_refs: Vec<&std::path::Path> = roots.iter().map(|p| p.as_path()).collect();
+    let path = crate::security::sanitize_path(source_file, &root_refs)?;
+    let content = if path.exists() { std::fs::read_to_string(&path)? } else { "{}".to_string() };
+
+    let mut root: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| crate::error::AppError::new("CONFIG_PARSE_ERROR","JSON 格式无效","")
+            .with_details(e.to_string()))?;
+    if !root.is_object() { root = serde_json::json!({"mcpServers":{}}); }
+    if root.get("mcpServers").is_none() {
+        root.as_object_mut().unwrap().insert("mcpServers".into(), serde_json::json!({}));
+    }
+    if let Some(orig) = original_name { if orig != name {
+        if let Some(o) = root.get_mut("mcpServers").and_then(|v|v.as_object_mut()) { o.remove(orig); }
+    }}
+    if let Some(o) = root.get_mut("mcpServers").and_then(|v|v.as_object_mut()) {
+        o.insert(name.into(), config_json.clone());
+    }
+    crate::config::write_config_inner(&path, &serde_json::to_string_pretty(&root).map_err(|e|
+        crate::error::AppError::new("WRITE_ERROR","序列化失败","").with_details(e.to_string()))?)?;
+    log::info!("MCP '{}' saved to {}", name, source_file);
+    Ok(())
+}
+
+/// Delete an MCP server entry from its source file
+pub fn delete_server_config(source_file: &str, name: &str) -> AppResult<()> {
+    // SECURITY: confine deletes to known MCP config locations
+    let roots = crate::security::mcp_allowed_roots();
+    let root_refs: Vec<&std::path::Path> = roots.iter().map(|p| p.as_path()).collect();
+    let path = crate::security::sanitize_path(source_file, &root_refs)?;
+    if !path.exists() { return Ok(()); }
+    let content = std::fs::read_to_string(&path)?;
+    let mut root: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| crate::error::AppError::new("CONFIG_PARSE_ERROR","JSON 格式无效","")
+            .with_details(e.to_string()))?;
+    if let Some(o) = root.get_mut("mcpServers").and_then(|v|v.as_object_mut()) { o.remove(name); }
+    crate::config::write_config_inner(&path, &serde_json::to_string_pretty(&root).map_err(|e|
+        crate::error::AppError::new("WRITE_ERROR","序列化失败","").with_details(e.to_string()))?)?;
+    log::info!("MCP '{}' deleted", name);
+    Ok(())
 }
 
 /// Test a stdio MCP server by starting it and performing a real initialization handshake
 pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
-    use tokio::process::Command;
-    use tokio::io::{AsyncWriteExt, AsyncBufReadExt, BufReader};
-    use std::time::Instant;
-    use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use std::time::{Duration, Instant};
 
     let start = Instant::now();
-    let mut suggestions: Vec<String> = Vec::new();
 
     let command = match &def.command {
         Some(cmd) => cmd,
@@ -148,7 +316,20 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
         },
     };
 
-    let mut child = match Command::new(command)
+    // SECURITY: validate command before spawning (defends against malicious
+    // config entries discovered by list_servers, which bypass the IPC layer).
+    if let Err(e) = crate::security::validate_mcp_command(command) {
+        return McpTestResult {
+            success: false, protocol_version: None, server_name: None,
+            server_version: None, tool_count: None, tool_names: vec![],
+            response_time_ms: start.elapsed().as_millis() as u64,
+            stdout_summary: Some(format!("命令校验失败: {}", e)),
+            stderr_summary: None,
+            suggestions: vec!["命令包含非法字符或路径穿越，已拒绝执行。".to_string()],
+        };
+    }
+
+    let mut child = match tokio::process::Command::new(command)
         .args(def.args.clone().unwrap_or_default())
         .kill_on_drop(true)
         .stdin(std::process::Stdio::piped())
@@ -214,7 +395,11 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
                     match line {
                         Ok(Some(l)) => {
                             response_lines.push(l.clone());
-                            if l.contains("\"result\"") || l.contains("\"error\"") {
+                            // Try to parse accumulated lines as JSON.
+                            // Only return when we have a complete parseable JSON-RPC response.
+                            // This handles both compact (single-line) and pretty-printed (multi-line) responses.
+                            let combined = response_lines.join("\n");
+                            if serde_json::from_str::<serde_json::Value>(&combined).is_ok() {
                                 return Ok::<Vec<String>, String>(response_lines);
                             }
                         }
@@ -252,11 +437,10 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
                     let s_name = server_info.and_then(|i| i.get("name")).and_then(|v| v.as_str()).map(String::from);
                     let s_ver = server_info.and_then(|i| i.get("version")).and_then(|v| v.as_str()).map(String::from);
 
-                    // Send tools/list request
-                    // (simplified: report initialization success)
+                    // Report capabilities
                     let mut tool_names = Vec::new();
                     if let Some(caps) = result.get("capabilities") {
-                        if let Some(tools_cap) = caps.get("tools") {
+                        if caps.get("tools").is_some() {
                             tool_names.push("工具列表可用".to_string());
                         }
                     }
@@ -325,7 +509,6 @@ pub async fn test_http_server(def: &McpServerDef) -> McpTestResult {
         .danger_accept_invalid_certs(false)
         .build().unwrap();
 
-    // Try DNS resolution first by making a simple request
     let init_payload = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,

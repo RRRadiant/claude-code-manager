@@ -10,6 +10,8 @@ interface EnvironmentState {
   lastDetected: string | null;
 
   detect: () => Promise<void>;
+  /** Refresh PATH from registry, then re-detect environment */
+  refreshAndDetect: () => Promise<void>;
   clear: () => void;
 }
 
@@ -32,6 +34,26 @@ export const useEnvironmentStore = create<EnvironmentState>((set) => ({
       set({
         loading: false,
         error: err instanceof Error ? err.message : '检测失败',
+      });
+    }
+  },
+
+  refreshAndDetect: async () => {
+    set({ loading: true, error: null });
+    try {
+      // First refresh the Windows environment from registry
+      await api.refreshEnvironment();
+      // Then re-detect everything
+      const status = await api.detectEnvironment();
+      set({
+        status,
+        loading: false,
+        lastDetected: new Date().toISOString(),
+      });
+    } catch (err) {
+      set({
+        loading: false,
+        error: err instanceof Error ? err.message : '刷新后检测失败',
       });
     }
   },

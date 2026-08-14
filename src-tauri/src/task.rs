@@ -168,7 +168,7 @@ impl TaskManager {
 
     /// Request cancellation of a task
     pub fn cancel_task(&self, id: &str) -> bool {
-        let mut tasks = self.tasks.lock().expect("task lock poisoned");
+        let tasks = self.tasks.lock().expect("task lock poisoned");
         if let Some(task) = tasks.get(id) {
             if task.state.cancellable {
                 *task.cancel_flag.lock().expect("cancel lock poisoned") = true;

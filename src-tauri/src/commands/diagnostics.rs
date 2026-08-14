@@ -1,12 +1,8 @@
-// Claude Code Manager - Diagnostics commands
-use serde::Serialize;
-use tauri::State;
-use crate::diagnostics::DiagnosticReport;
+use crate::error::AppError;
 
 #[tauri::command]
 pub async fn run_diagnostics(
-    state: State<'_, crate::AppState>,
-) -> Result<crate::diagnostics::DiagnosticReport, String> {
+) -> Result<crate::diagnostics::DiagnosticReport, AppError> {
     log::info!("Running full diagnostics");
     let report = crate::diagnostics::run_all_checks();
     Ok(report)

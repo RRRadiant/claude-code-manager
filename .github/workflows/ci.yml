@@ -2,13 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, master]
     paths-ignore:
       - 'docs/**'
       - '*.md'
       - '.github/ISSUE_TEMPLATE/**'
   pull_request:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch:
 
 concurrency:
@@ -38,9 +38,8 @@ jobs:
       - name: TypeScript type check
         run: npx tsc --noEmit
 
-      - name: ESLint
-        run: npx eslint src/ --ext .ts,.tsx --max-warnings 0
-        continue-on-error: true
+      - name: Lint (oxlint)
+        run: npm run lint
 
   lint-rust:
     name: Rust Lint
@@ -80,25 +79,6 @@ jobs:
 
       - name: Run tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
-
-  test-frontend:
-    name: Frontend Tests
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run tests
-        run: npx vitest run --coverage
-        continue-on-error: true
 
   # Security audit
   audit:

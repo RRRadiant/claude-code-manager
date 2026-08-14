@@ -1,86 +1,139 @@
 import { useEffect, useState } from 'react'
 import { useEnvironmentStore } from '../stores/environmentStore'
-import type { EnvironmentStatus } from '../types'
+import { useConsoleStore } from '../stores/consoleStore'
+import type { EnvironmentStatus, InstallStepResult } from '../types'
+import * as api from '../services/tauri'
+import { GlassCard } from '../components/glass'
 
 export default function EnvironmentPage() {
   const { status, loading, detect } = useEnvironmentStore()
-  const [installStatus, setInstallStatus] = useState<string | null>(null)
+  const { activeTask } = useConsoleStore()
+  const [plan, setPlan] = useState<InstallStepResult[] | null>(null)
+  const [planLoading, setPlanLoading] = useState(false)
 
   useEffect(() => { detect() }, [])
 
-  const handleInstall = async () => {
-    setInstallStatus('installing')
-    // TODO: Connect to Tauri backend
-    setInstallStatus('not-implemented')
+  const loadPlan = async () => {
+    setPlanLoading(true)
+    try { setPlan(await api.generateInstallPlan()) }
+    catch { /* ignore */ }
+    finally { setPlanLoading(false) }
   }
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h1>安装与环境</h1>
-        <div className="page-actions">
-          <button className="btn btn-primary" onClick={handleInstall} disabled={installStatus === 'installing'}>
-            {installStatus === 'installing' ? '安装中...' : '一键安装 Claude Code'}
-          </button>
+
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--s4)' }}>
+        <h1 style={{ margin: 0 }}>环境</h1>
+        <div style={{ display: 'flex', gap: 'var(--s1)' }}>
           <button className="btn btn-secondary" onClick={detect} disabled={loading}>
             {loading ? '检测中...' : '重新检测'}
           </button>
+          <button className="btn btn-primary" onClick={loadPlan} disabled={planLoading}>
+            {planLoading ? '...' : '安装计划'}
+          </button>
         </div>
       </div>
 
-      {installStatus === 'not-implemented' && (
-        <div className="alert alert-info">
-          <span>安装功能将连接 Rust 后端执行。当前为 UI 原型阶段。</span>
-        </div>
+      {/* Real-time progress bar (Plan 1: EnvironmentPage progress) */}
+      {activeTask && activeTask.status === 'running' && (
+        <GlassCard blur={10} tint="rgba(10,132,255,0.06)" style={{ marginBottom: 'var(--s3)' }}>
+          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--s1)', color: 'var(--text-secondary)' }}>
+            {activeTask.title}
+          </div>
+          <div style={{
+            height: 4, borderRadius: 2, background: 'var(--bg-tertiary)',
+            overflow: 'hidden', marginBottom: 'var(--s1)',
+          }}>
+            <div style={{
+              width: `${Math.max(2, activeTask.progress)}%`,
+              height: '100%', borderRadius: 2,
+              background: 'var(--accent)',
+              transition: 'width 0.3s ease',
+            }} />
+          </div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
+            {activeTask.step}
+          </div>
+        </GlassCard>
       )}
 
-      <div className="section">
-        <h2>系统环境</h2>
-        {renderCheckGroups(status, loading)}
-      </div>
+      {/* System info */}
+      <SystemInfo status={status} />
 
-      <div className="section">
-        <h2>安装选项</h2>
-        <div className="card-grid">
-          <div className="card glass">
-            <h3>官方推荐（原生）</h3>
-            <p>通过 PowerShell 安装 Claude Code 原生 Windows 版本。不需要 Node.js。</p>
-            <button className="btn btn-primary" onClick={handleInstall}>安装</button>
-          </div>
-          <div className="card glass">
-            <h3>WinGet</h3>
-            <p>通过 Windows 包管理器安装。需要 WinGet 支持。</p>
-            <button className="btn btn-secondary">安装</button>
+      {/* Install plan */}
+      {plan && plan.length > 0 && (
+        <div style={{ marginTop: 'var(--s4)' }}>
+          <h2 style={{ marginBottom: 'var(--s2)' }}>安装计划</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s1)' }}>
+            {plan.map(item => (
+              <GlassCard key={item.component} blur={6} tint="rgba(255,255,255,0.06)">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s1)' }}>
+                    <span style={{
+                      width: 8, height: 8, borderRadius: 4, flexShrink: 0,
+                      background: item.success ? 'var(--success)' : 'var(--text-tertiary)',
+                    }} />
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 'var(--text-md)' }}>{item.component}</div>
+                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginTop: 2 }}>
+                        {item.version ?? item.message}
+                      </div>
+                    </div>
+                  </div>
+                  {!item.success && (
+                    <button className="btn btn-ghost" style={{ fontSize: 'var(--text-sm)' }}
+                      disabled={activeTask?.status === 'running'}
+                      onClick={() => {
+                        if (item.component === 'Claude Code')
+                          api.installClaudeCode().catch(() => {})
+                        else
+                          api.installFullEnvironment().catch(() => {})
+                      }}
+                    >
+                      安装
+                    </button>
+                  )}
+                </div>
+              </GlassCard>
+            ))}
           </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
 
-function renderCheckGroups(status: EnvironmentStatus | null, loading: boolean) {
-  if (loading) return <p className="text-secondary">检测中...</p>
-  if (!status) return <p className="text-secondary">点击"重新检测"开始</p>
+// ── System info ──
 
-  const checks = [
-    { label: 'Windows 版本', value: status.windows.display_version, ok: true },
-    { label: '系统架构', value: status.windows.architecture, ok: true },
-    { label: '管理员权限', value: status.windows.is_elevated ? '是' : '否', ok: true },
-    { label: 'PowerShell', value: status.powershell.available ? `可用 (${status.powershell.version || ''})` : '不可用', ok: status.powershell.available },
-    { label: 'Git for Windows', value: status.git.installed ? `已安装 (${status.git.version || ''})` : '未安装（可选）', ok: true },
-    { label: 'WebView2', value: status.webview2.installed ? '已安装' : '未检测到', ok: status.webview2.installed },
-    { label: 'Claude Code', value: status.claude_code.installed ? `已安装 (${status.claude_code.version || ''})` : '未安装', ok: status.claude_code.installed },
-    { label: 'PATH 配置', value: status.path.claude_bin_in_path ? '已配置' : '未配置', ok: status.path.claude_bin_in_path },
+function SystemInfo({ status }: { status: EnvironmentStatus | null }) {
+  if (!status) return <p className="text-tertiary" style={{ marginTop: 'var(--s4)' }}>点击"重新检测"开始</p>
+
+  const items: [string, string | undefined, boolean][] = [
+    ['Windows', status.windows.display_version, true],
+    ['架构', status.windows.display_architecture, true],
+    ['PowerShell', status.powershell.version ?? (status.powershell.available ? '可用' : '不可用'), status.powershell.available],
+    ['Git', status.git.version ?? undefined, status.git.installed],
+    ['Node', status.node.node_version ?? undefined, !!status.node.node_version],
+    ['npm', status.node.npm_version ?? undefined, !!status.node.npm_version],
+    ['Claude Code', status.claude_code.version || (status.claude_code.installed ? '已安装' : undefined), status.claude_code.installed],
+    ['WebView2', status.webview2.version ?? (status.webview2.installed ? '已安装' : '未检测到'), status.webview2.installed],
   ]
 
   return (
-    <div className="check-list">
-      {checks.map((c) => (
-        <div key={c.label} className={`check-item ${c.ok ? 'ok' : 'warn'}`}>
-          <span className={`check-dot ${c.ok ? 'bg-success' : 'bg-warning'}`} />
-          <span className="check-label">{c.label}</span>
-          <span className="check-value">{c.value}</span>
-          {!c.ok && <button className="btn btn-small btn-ghost">修复</button>}
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 'var(--s1)' }}>
+      {items.map(([label, value, ok]) => (
+        <div key={label} style={{
+          display: 'flex', alignItems: 'center', gap: 'var(--s1)',
+          padding: 'var(--s2)', borderRadius: 'var(--r2)',
+          background: 'var(--bg-secondary)', border: '1px solid var(--border-secondary)',
+        }}>
+          <span style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, background: ok ? 'var(--success)' : 'var(--text-tertiary)' }} />
+          <div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+            <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: ok ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>{value ?? '—'}</div>
+          </div>
         </div>
       ))}
     </div>

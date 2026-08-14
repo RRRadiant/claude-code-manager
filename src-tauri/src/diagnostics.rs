@@ -1,5 +1,4 @@
 // Claude Code Manager - Diagnostic system
-use crate::error::AppError;
 use serde::Serialize;
 use std::time::Instant;
 
@@ -83,20 +82,15 @@ pub fn run_all_checks() -> DiagnosticReport {
 
 fn check_windows_version() -> DiagCheckResult {
     let info = crate::environment::detect_windows();
-    let min_build = 17763u32; // Windows 10 1809
 
     DiagCheckResult {
         name: "Windows 版本".to_string(),
         category: "environment".to_string(),
-        status: if info.is_arm64 || info.architecture.contains("64") {
-            DiagStatus::Pass
-        } else {
-            DiagStatus::Warning
-        },
+        status: DiagStatus::Pass,
         message: format!("系统: {}", info.display_version),
         details: Some(format!(
             "架构: {} | 管理权限: {}",
-            info.architecture,
+            info.display_architecture,
             if info.is_elevated { "是" } else { "否" }
         )),
         fix_suggestion: None,
@@ -177,20 +171,32 @@ fn check_path() -> DiagCheckResult {
 
 fn check_claude_code_installed() -> DiagCheckResult {
     let info = crate::environment::detect_claude_code();
+    let health_status = info.health.as_deref().unwrap_or("unknown");
+    let status = if !info.installed {
+        DiagStatus::Error
+    } else if health_status == "healthy" {
+        DiagStatus::Pass
+    } else if health_status == "warning" {
+        DiagStatus::Warning
+    } else {
+        DiagStatus::Warning
+    };
+
     DiagCheckResult {
         name: "Claude Code 安装状态".to_string(),
         category: "claude_code".to_string(),
-        status: if info.installed {
-            DiagStatus::Pass
-        } else {
-            DiagStatus::Error
-        },
+        status,
         message: if info.installed {
-            format!("Claude Code 已安装 ({})", info.version.as_deref().unwrap_or("版本未知"))
+            let method = info.install_method.as_deref().unwrap_or("unknown");
+            format!("Claude Code 已安装 (来源: {})", method)
         } else {
             "Claude Code 未安装".to_string()
         },
-        details: info.path.map(|p| p.to_string_lossy().to_string()),
+        details: Some(format!(
+            "路径: {} | 健康: {}",
+            info.path.as_deref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            health_status,
+        )),
         fix_suggestion: if !info.installed {
             Some("请前往「安装与环境」页面一键安装 Claude Code。".to_string())
         } else {
@@ -206,15 +212,19 @@ fn check_claude_code_version() -> DiagCheckResult {
         category: "claude_code".to_string(),
         status: if info.version.is_some() {
             DiagStatus::Pass
+        } else if info.installed {
+            DiagStatus::Warning
         } else {
-            DiagStatus::Error
+            DiagStatus::Skipped
         },
         message: if let Some(ref v) = info.version {
             format!("Claude Code 版本: {}", v)
+        } else if info.installed {
+            "安装可能不完整（无法获取版本）".to_string()
         } else {
-            "无法检测 Claude Code 版本".to_string()
+            "Claude Code 未安装，跳过版本检查".to_string()
         },
-        details: None,
+        details: info.path.as_ref().map(|p| p.to_string_lossy().to_string()),
         fix_suggestion: None,
     }
 }

@@ -20,13 +20,12 @@
 
 ## 功能
 
-- 🔧 **环境检测与安装** — 一键检测系统环境，安装/修复/卸载 Claude Code
+- 🔧 **环境检测与安装** — 一键检测系统环境，安装/卸载 Claude Code
 - 🔌 **API 配置** — 支持 Anthropic、DeepSeek 和自定义兼容接口
 - 🤖 **模型管理** — 检测并选择可用的 AI 模型
 - 📝 **配置文件管理** — 可视化编辑 settings.json、CLAUDE.md、.mcp.json
-- 🔗 **MCP 管理** — 添加、编辑、测试 MCP Server
-- 🩺 **故障诊断** — 一键诊断并修复常见问题
-- 📦 **自动更新** — Claude Code 更新 + 应用自身更新
+- 🔗 **MCP 管理** — 编辑、测试 MCP Server
+- 🩺 **故障诊断** — 一键诊断常见问题
 
 ## 系统要求
 
@@ -77,10 +76,10 @@ npx tauri build --target aarch64-pc-windows-msvc --bundles nsis
 
 ## 安全说明
 
-- **API Key 安全存储** — 所有 API Key 通过 Windows Credential Manager 加密存储
+- **API Key 安全存储** — 所有 API Key 通过 Windows Credential Manager 加密存储，前端仅显示掩码
 - **命令隔离** — 前端不能直接执行系统命令，所有操作经过 Rust 后端安全处理
-- **日志脱敏** — 日志文件自动移除 API Key、Token、密码等敏感信息
-- **更新验证** — 更新包经过数字签名和 SHA-256 双重校验
+- **MCP 安全校验** — MCP 命令与配置路径经安全模块校验，防止命令注入与路径穿越
+- **日志脱敏** — 日志模块提供 API Key、Token、密码等敏感信息脱敏能力
 
 ## 项目结构
 

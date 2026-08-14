@@ -106,56 +106,20 @@ impl From<keyring::Error> for AppError {
 /// Result type alias using AppError
 pub type AppResult<T> = Result<T, AppError>;
 
-/// Error code constants
+/// Error code constants — all codes referenced by at least one module
 pub mod codes {
-    // Environment errors
-    pub const ENV_DETECTION_FAILED: &str = "ENV_DETECTION_FAILED";
-    pub const ENV_PATH_NOT_FOUND: &str = "ENV_PATH_NOT_FOUND";
-    pub const ENV_PERMISSION_DENIED: &str = "ENV_PERMISSION_DENIED";
-
-    // Installation errors
     pub const INSTALL_NETWORK_ERROR: &str = "INSTALL_NETWORK_ERROR";
     pub const INSTALL_DOWNLOAD_FAILED: &str = "INSTALL_DOWNLOAD_FAILED";
-    pub const INSTALL_VERIFICATION_FAILED: &str = "INSTALL_VERIFICATION_FAILED";
     pub const INSTALL_CANCELLED: &str = "INSTALL_CANCELLED";
     pub const INSTALL_TIMEOUT: &str = "INSTALL_TIMEOUT";
-
-    // Config errors
     pub const CONFIG_PARSE_ERROR: &str = "CONFIG_PARSE_ERROR";
     pub const CONFIG_WRITE_ERROR: &str = "CONFIG_WRITE_ERROR";
-    pub const CONFIG_BACKUP_ERROR: &str = "CONFIG_BACKUP_ERROR";
-    pub const CONFIG_INVALID: &str = "CONFIG_INVALID";
-
-    // Provider errors
     pub const PROVIDER_AUTH_ERROR: &str = "PROVIDER_AUTH_ERROR";
     pub const PROVIDER_NETWORK_ERROR: &str = "PROVIDER_NETWORK_ERROR";
     pub const PROVIDER_TIMEOUT: &str = "PROVIDER_TIMEOUT";
-    pub const PROVIDER_MODEL_NOT_FOUND: &str = "PROVIDER_MODEL_NOT_FOUND";
-
-    // Model errors
     pub const MODEL_DETECTION_FAILED: &str = "MODEL_DETECTION_FAILED";
     pub const MODEL_LIST_UNAVAILABLE: &str = "MODEL_LIST_UNAVAILABLE";
-
-    // MCP errors
-    pub const MCP_STARTUP_FAILED: &str = "MCP_STARTUP_FAILED";
-    pub const MCP_HANDSHAKE_FAILED: &str = "MCP_HANDSHAKE_FAILED";
-    pub const MCP_TIMEOUT: &str = "MCP_TIMEOUT";
-    pub const MCP_INVALID_CONFIG: &str = "MCP_INVALID_CONFIG";
-
-    // Update errors
-    pub const UPDATE_CHECK_FAILED: &str = "UPDATE_CHECK_FAILED";
-    pub const UPDATE_DOWNLOAD_FAILED: &str = "UPDATE_DOWNLOAD_FAILED";
-    pub const UPDATE_VERIFICATION_FAILED: &str = "UPDATE_VERIFICATION_FAILED";
-    pub const UPDATE_SIGNATURE_INVALID: &str = "UPDATE_SIGNATURE_INVALID";
-
-    // Security errors
     pub const SECURITY_PATH_TRAVERSAL: &str = "SECURITY_PATH_TRAVERSAL";
     pub const SECURITY_INVALID_INPUT: &str = "SECURITY_INVALID_INPUT";
     pub const SECURITY_PERMISSION_DENIED: &str = "SECURITY_PERMISSION_DENIED";
-
-    // Network errors
-    pub const NETWORK_DNS_FAILURE: &str = "NETWORK_DNS_FAILURE";
-    pub const NETWORK_TLS_FAILURE: &str = "NETWORK_TLS_FAILURE";
-    pub const NETWORK_TIMEOUT: &str = "NETWORK_TIMEOUT";
-    pub const NETWORK_PROXY_ERROR: &str = "NETWORK_PROXY_ERROR";
 }

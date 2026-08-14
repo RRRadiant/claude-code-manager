@@ -1,7 +1,7 @@
 // Claude Code Manager - Provider adapter implementations
 use crate::error::{AppError, codes, AppResult};
 use crate::credentials;
-use serde::{Serialize, Deserialize};
+use serde::Deserialize;
 use std::time::Instant;
 
 // ===== Re-export trait and types =====
@@ -564,6 +564,11 @@ impl ProviderAdapter for CustomProvider {
 
 // ===== Helper: Resolve API Key from Credential Manager =====
 async fn resolve_api_key(config: &ProviderConfig) -> AppResult<String> {
+    // If API key was passed directly via override, use it (bypasses credential manager)
+    if let Some(ref key) = config.api_key_override {
+        return Ok(key.clone());
+    }
+
     if let Some(ref cred_id) = config.credential_id {
         // Try credential manager
         match credentials::get_credential(cred_id, "api_key") {

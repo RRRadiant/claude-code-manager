@@ -1,13 +1,39 @@
 // Claude Code Manager - Frontend type definitions (mirrors Rust backend types)
 
+// ===== Installer Types =====
+
+export interface InstallStepResult {
+  component: string;
+  success: boolean;
+  version: string | null;
+  message: string;
+}
+
 // ===== Environment Types =====
+
+export type Architecture = 'x86' | 'arm' | 'unknown'
+
+export interface SystemInfo {
+  os: 'windows' | 'macos' | 'linux'
+  version: string
+  displayName: string
+  architecture: Architecture
+}
 
 export interface WindowsInfo {
   version: string;
   display_version: string;
   architecture: string;
+  display_architecture: Architecture;
   is_arm64: boolean;
   is_elevated: boolean;
+}
+
+export interface NodeInfo {
+  node_version: string | null;
+  npm_version: string | null;
+  detection_method?: string;
+  resolved_path?: string | null;
 }
 
 export interface PowerShellInfo {
@@ -27,6 +53,10 @@ export interface ClaudeCodeInfo {
   version: string | null;
   path: string | null;
   install_source: string | null;
+  install_method: string | null;
+  config_path: string | null;
+  health: string | null;
+  details: string[];
 }
 
 export interface PathCheck {
@@ -41,6 +71,7 @@ export interface WebView2Info {
 }
 
 export interface EnvironmentStatus {
+  node: NodeInfo;
   windows: WindowsInfo;
   powershell: PowerShellInfo;
   git: GitInfo;
@@ -170,6 +201,7 @@ export interface McpServerDef {
   tool_timeout_ms: number | null;
   scope: McpScope;
   enabled: boolean;
+  source_file: string | null;
 }
 
 export interface McpTestResult {
@@ -206,18 +238,4 @@ export interface DiagnosticReport {
   errors: number;
   checks: DiagCheckResult[];
   system_info: string;
-}
-
-// ===== Update Types =====
-
-export type UpdateChannel = 'Stable' | 'Beta';
-export type UpdateStatus = 'Idle' | 'Checking' | 'Available' | 'Downloading'
-  | 'Verifying' | 'Ready' | 'Installing' | 'Failed' | 'UpToDate';
-
-export interface UpdateState {
-  current_version: string;
-  latest_version: string | null;
-  update_available: boolean;
-  download_progress: number | null;
-  status: UpdateStatus;
 }

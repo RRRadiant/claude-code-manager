@@ -1,5 +1,6 @@
 // Claude Code Manager - Global application state
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -35,30 +36,48 @@ function getSystemTheme(): 'light' | 'dark' {
   return 'light';
 }
 
-export const useAppStore = create<AppState>((set) => ({
-  theme: 'system',
-  effectiveTheme: getSystemTheme(),
+export const useAppStore = create<AppState>()(
+  persist(
+    (set) => ({
+      theme: 'system',
+      effectiveTheme: getSystemTheme(),
 
-  onboardingCompleted: false,
-  onboardingStep: 0,
+      onboardingCompleted: false,
+      onboardingStep: 0,
 
-  sidebarCollapsed: false,
-  tweaksPanelOpen: false,
-  reducedMotion: false,
-  reducedGlass: false,
+      sidebarCollapsed: false,
+      tweaksPanelOpen: false,
+      reducedMotion: false,
+      reducedGlass: false,
 
-  setTheme: (theme) => {
-    const effectiveTheme = theme === 'system' ? getSystemTheme() : theme;
-    set({ theme, effectiveTheme });
-    document.documentElement.setAttribute('data-theme', effectiveTheme);
-  },
+      setTheme: (theme) => {
+        const effectiveTheme = theme === 'system' ? getSystemTheme() : theme;
+        set({ theme, effectiveTheme });
+        document.documentElement.setAttribute('data-theme', effectiveTheme);
+      },
 
-  setOnboardingCompleted: (completed) => set({ onboardingCompleted: completed }),
-  setOnboardingStep: (step) => set({ onboardingStep: step }),
+      setOnboardingCompleted: (completed) => set({ onboardingCompleted: completed }),
+      setOnboardingStep: (step) => set({ onboardingStep: step }),
 
-  toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
-  toggleTweaks: () => set((s) => ({ tweaksPanelOpen: !s.tweaksPanelOpen })),
+      toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      toggleTweaks: () => set((s) => ({ tweaksPanelOpen: !s.tweaksPanelOpen })),
 
-  setReducedMotion: (value) => set({ reducedMotion: value }),
-  setReducedGlass: (value) => set({ reducedGlass: value }),
-}));
+      setReducedMotion: (value) => set({ reducedMotion: value }),
+      setReducedGlass: (value) => set({ reducedGlass: value }),
+    }),
+    {
+      name: 'ccm-app',
+      // Persist user preferences only; transient UI state (tweaksPanelOpen)
+      // is intentionally excluded so it resets each launch.
+      partialize: (state) => ({
+        theme: state.theme,
+        effectiveTheme: state.effectiveTheme,
+        onboardingCompleted: state.onboardingCompleted,
+        onboardingStep: state.onboardingStep,
+        sidebarCollapsed: state.sidebarCollapsed,
+        reducedMotion: state.reducedMotion,
+        reducedGlass: state.reducedGlass,
+      }),
+    },
+  ),
+);
