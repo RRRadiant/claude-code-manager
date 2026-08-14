@@ -106,8 +106,11 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
+      # cargo-audit >= 0.21 dropped `--manifest-path`; run from the directory
+      # that contains Cargo.lock instead.
       - name: Audit Rust dependencies
-        run: cargo audit --manifest-path src-tauri/Cargo.toml
+        working-directory: src-tauri
+        run: cargo audit
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

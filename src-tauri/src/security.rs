@@ -135,10 +135,17 @@ fn canonicalize_loose(path: &Path) -> PathBuf {
 }
 
 /// Case-insensitive (Windows) normalized string form of a path.
+///
+/// `std::fs::canonicalize` may return verbatim paths prefixed with `\\?\`
+/// (or `\\.\` for devices) on Windows; strip those so canonicalized and
+/// literal paths compare equal.
 fn normalized(path: &Path) -> String {
-    path.to_string_lossy()
-        .trim_end_matches(['\\', '/'])
-        .to_lowercase()
+    let s = path.to_string_lossy();
+    let s = s
+        .strip_prefix(r"\\?\")
+        .or_else(|| s.strip_prefix(r"\\.\"))
+        .unwrap_or(&s);
+    s.trim_end_matches(['\\', '/']).to_lowercase()
 }
 
 /// Case-insensitive containment check: `path` is `root` or a descendant of it.
@@ -467,12 +474,18 @@ mod tests {
 
     #[test]
     fn test_sanitize_path_allowed_file() {
-        // A root-level file must only be allowed via the file allow-list, not a dir root.
-        let home =
-            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
-        let file = PathBuf::from(&home).join(".claude.json");
+        // A root-level file must only be allowed via the file allow-list, not a
+        // dir root. Use a fresh temp dir so the test is environment-independent
+        // (USERPROFILE on CI runners canonicalizes to verbatim `\\?\` paths).
+        let dir = std::env::temp_dir().join(format!("ccm-sec-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("config.json");
         let result = sanitize_path(&file.to_string_lossy(), &[], &[file.as_path()]);
-        assert!(result.is_ok(), "allow-listed file should pass");
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(
+            result.is_ok(),
+            "allow-listed file should pass: {result:?}"
+        );
     }
 
     #[test]
