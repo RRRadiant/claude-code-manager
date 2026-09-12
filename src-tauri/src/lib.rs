@@ -33,6 +33,12 @@ use logging::LogSanitizer;
 pub struct AppState {
     pub log_sanitizer: LogSanitizer,
     pub task_manager: task::TaskManager,
+    /// Serializes read-modify-write cycles on `HKCU\Environment\PATH`.
+    ///
+    /// Node.js and Git install concurrently, and both append their bin directory
+    /// to the user PATH. Without this lock the two writes could interleave and
+    /// one entry would be lost.
+    pub path_lock: std::sync::Mutex<()>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -43,6 +49,7 @@ pub fn run() {
         .manage(AppState {
             log_sanitizer,
             task_manager: task::TaskManager::new(),
+            path_lock: std::sync::Mutex::new(()),
         })
         .setup(|app| {
             // Always initialize logging. Debug builds are verbose; release builds
@@ -83,6 +90,8 @@ pub fn run() {
             commands::providers::delete_provider_credential,
             commands::providers::save_provider_config,
             commands::providers::load_provider_config,
+            commands::providers::detect_existing_claude_config,
+            commands::providers::import_existing_claude_config,
             // MCP commands
             commands::mcp::list_mcp_servers,
             commands::mcp::test_mcp_server,

@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::installer;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[tauri::command]
 pub async fn generate_install_plan() -> Result<Vec<installer::InstallStepResult>, String> {
@@ -9,13 +9,62 @@ pub async fn generate_install_plan() -> Result<Vec<installer::InstallStepResult>
         .map_err(|e| e.to_string())
 }
 
+/// Relaunch the application so it starts with a freshly read environment.
+///
+/// `AppHandle::restart()` re-executes the binary with the **current process's
+/// environment block**, so a PATH this process inherited before Node.js/npm
+/// existed is handed straight to the new process — a restart in name only. That
+/// is why a freshly installed `claude` stayed invisible until the user launched
+/// the app by hand (Explorer passes a PATH read after the installer updated the
+/// registry).
+///
+/// So we spawn the successor ourselves and overwrite `PATH` with the merged
+/// registry value, which is exactly what a fresh logon would provide.
 #[tauri::command]
 pub async fn restart_app(app_handle: tauri::AppHandle) -> Result<(), AppError> {
     log::info!("Restarting app on user request");
-    // Brief delay so the frontend can show a message
+
+    // Brief delay so the frontend can show a message.
     std::thread::sleep(std::time::Duration::from_millis(500));
-    // `restart()` never returns (`!`), so this coerces to the Result type.
-    app_handle.restart()
+
+    let exe = std::env::current_exe().map_err(|e| {
+        AppError::new(
+            crate::error::codes::INSTALL_DOWNLOAD_FAILED,
+            "重启失败",
+            "无法定位应用程序路径。",
+        )
+        .with_details(e.to_string())
+    })?;
+
+    // Read the registry directly rather than trusting this process's inherited PATH.
+    let merged = crate::env_refresh::refresh_windows_path().merged_path;
+    log::info!("Relaunching {} with refreshed PATH", exe.to_string_lossy());
+
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.env("PATH", &merged);
+    if let Some(dir) = exe.parent() {
+        cmd.current_dir(dir);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    match cmd.spawn() {
+        Ok(child) => {
+            log::info!("Successor process started (pid={})", child.id());
+            // Exit only after the successor exists, so the app never disappears
+            // without a replacement.
+            app_handle.exit(0);
+            Ok(())
+        }
+        Err(e) => {
+            log::error!("Failed to relaunch with refreshed PATH: {e}");
+            // Fall back to Tauri's own restart rather than leaving the user stuck.
+            app_handle.restart()
+        }
+    }
 }
 
 #[tauri::command]
@@ -69,6 +118,21 @@ pub async fn install_claude_code(
                 log::info!("Claude Code install: {}", r.message);
                 if r.success {
                     state2.task_manager.succeed_task(&tid, &app);
+
+                    // The `claude` shim was just created in a directory this
+                    // process does not have on its PATH, so ask for a restart —
+                    // otherwise the UI keeps reporting "not installed" and looks
+                    // like the install failed.
+                    if installer::is_claude_restart_needed(std::slice::from_ref(&r)) {
+                        log::info!("Claude Code not visible yet; requesting restart");
+                        let _ = app.emit(
+                            "restart-required",
+                            installer::RestartRequest {
+                                stage: installer::RestartStage::ClaudeCode,
+                            },
+                        );
+                    }
+                    let _ = app.emit("environment-changed", true);
                 } else {
                     state2.task_manager.fail_task(&tid, r.message, &app);
                 }
@@ -100,12 +164,15 @@ pub async fn install_full_environment(
         match installer::run_full_install(&tid, &app).await {
             Ok(results) => {
                 let all_ok = results.iter().all(|r| r.success);
+                // The run intentionally stops after Node.js + Git to request a
+                // restart, leaving Claude Code pending. That is a successful
+                // milestone, not a failure — the dialog is the actionable output.
+                let pending_restart = installer::is_pending_restart(&results);
                 log::info!(
-                    "Full install completed: {} steps, all_success={}",
-                    results.len(),
-                    all_ok
+                    "Full install completed: {} steps, all_success={all_ok}, pending_restart={pending_restart}",
+                    results.len()
                 );
-                if all_ok {
+                if all_ok || pending_restart {
                     state2.task_manager.succeed_task(&tid, &app);
                 } else {
                     // Partial failure — surface the first failing step's message.

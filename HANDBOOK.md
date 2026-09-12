@@ -142,9 +142,26 @@ restart_app               重启应用
 
 运行测试: `cd src-tauri && cargo test`
 
+## WebView2 启动期引导安装
+
+Windows 10 默认未安装 WebView2，而便携版是单文件 exe（不内置引导安装器）。
+`main.rs` 在进入 Tauri、前端渲染之前处理缺失，流程：
+
+1. 已安装 → 直接 `app_lib::run()` 启动。
+2. 缺失时，先尝试运行 exe **同目录**的 `MicrosoftEdgeWebview2Setup.exe`（`/silent /install`）。
+3. 同目录没有或安装失败 → 弹 `MB_OKCANCEL` 确认框，询问是否自动下载并安装。
+   - 确认 → 用 `reqwest` + `tokio` 下载 Evergreen 引导安装器到 `%TEMP%`（校验 > 500KB），
+     再以非静默 `/install` 运行（显示微软官方进度窗口），完成后用 `detect_webview2()` 二次校验。
+   - 取消 → 直接退出。
+4. 下载或安装失败 → 弹含官网链接的错误框后退出。
+
+引导安装器下载地址（`main.rs` 常量 `WEBVIEW2_BOOTSTRAPPER_URL`）：
+`https://go.microsoft.com/fwlink/p/?LinkId=2124703`（与 `package.json` 的 `download:webview2` 脚本一致）。
+
 ## 安全设计亮点
 
-- API Key 不存 JSON / localStorage → Windows Credential Manager
+- API Key 存 Windows Credential Manager，并明文写入 `~/.claude/settings.json`
+  （Claude Code 只认字面值 token）；写入前自动生成 `.bak` 备份，写入后回读校验
 - 前端不执行任何系统命令 → 所有操作经 Rust IPC
 - 命令使用参数数组 → 无字符串拼接/注入
 - 日志统一脱敏 → API Key/Token/密码/邮箱自动替换

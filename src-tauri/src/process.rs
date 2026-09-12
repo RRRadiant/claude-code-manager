@@ -20,6 +20,13 @@ pub struct CommandSpec {
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub env: Vec<(String, String)>,
+    /// Environment variables to remove from the child's inherited block.
+    ///
+    /// Needed because a variable can be *actively harmful* when inherited: a
+    /// `PSModulePath` belonging to PowerShell 7 breaks module autoloading in
+    /// Windows PowerShell 5.1, and `env(k, "")` would leave an empty value
+    /// rather than restoring the default.
+    pub env_remove: Vec<String>,
     pub timeout: Duration,
 }
 
@@ -30,6 +37,7 @@ impl CommandSpec {
             args: Vec::new(),
             cwd: None,
             env: Vec::new(),
+            env_remove: Vec::new(),
             timeout: Duration::from_secs(120),
         }
     }
@@ -52,6 +60,11 @@ impl CommandSpec {
     #[allow(dead_code)]
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.push((key.into(), value.into()));
+        self
+    }
+    /// Remove a variable from the child's inherited environment.
+    pub fn env_remove(mut self, key: impl Into<String>) -> Self {
+        self.env_remove.push(key.into());
         self
     }
     pub fn timeout(mut self, duration: Duration) -> Self {
@@ -84,6 +97,9 @@ pub async fn execute_command(
     }
     for (k, v) in &spec.env {
         cmd.env(k, v);
+    }
+    for k in &spec.env_remove {
+        cmd.env_remove(k);
     }
 
     #[cfg(windows)]

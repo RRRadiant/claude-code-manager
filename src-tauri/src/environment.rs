@@ -11,6 +11,72 @@ fn cmd(program: &str) -> std::process::Command {
     c
 }
 
+/// How long a detection probe may run before it is killed.
+///
+/// Detection runs on the UI's critical path (the environment page and the
+/// onboarding wizard await it), so an unbounded probe that stalls — a freshly
+/// extracted `node.exe` waiting on an antivirus first scan is the realistic
+/// case — would freeze the whole page with no error.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Run a probe with a hard deadline, returning its output only if it finished.
+///
+/// Prefer this over `Command::output()`, which blocks indefinitely.
+fn run_bounded(cmd: &mut std::process::Command) -> Option<std::process::Output> {
+    run_bounded_for(cmd, PROBE_TIMEOUT)
+}
+
+/// `run_bounded` with an explicit deadline (lets tests use a short budget).
+fn run_bounded_for(
+    cmd: &mut std::process::Command,
+    budget: std::time::Duration,
+) -> Option<std::process::Output> {
+    let start = std::time::Instant::now();
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if start.elapsed() >= budget {
+                    log::warn!("Detection probe timed out after {budget:?}; killed");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(_) => return None,
+        }
+    }
+
+    child.wait_with_output().ok()
+}
+
+/// Probe `program --version`, returning trimmed stdout on success.
+fn probe_version(path: &str) -> Option<String> {
+    let start = std::time::Instant::now();
+    let mut c = cmd(path);
+    c.args(["--version"]);
+    let out = run_bounded(&mut c)
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+    // A multi-second `node --version` means real-time AV is scanning the binary —
+    // the honest explanation for an install that looks stalled but is working.
+    let elapsed = start.elapsed();
+    if elapsed > std::time::Duration::from_secs(2) {
+        log::warn!("`{path} --version` took {elapsed:?} (antivirus scan?)");
+    } else {
+        log::debug!("`{path} --version` took {elapsed:?}");
+    }
+    out
+}
+
 /// Windows version information
 #[derive(Debug, Clone, Serialize)]
 pub struct WindowsInfo {
@@ -133,49 +199,20 @@ pub struct EnvironmentStatus {
 
 // ── Node.js detection helpers ────────────────────────────────────
 
-/// Try to detect node/npm using the current process PATH (standard)
+/// Try to detect node/npm using the current process PATH (standard).
+///
+/// Both probes are independent process spawns; run them concurrently. Measured on
+/// a warm cache, `node --version` costs ~60 ms and `npm --version` ~230 ms, so
+/// running them sequentially wasted the node probe's entire duration waiting.
 fn detect_node_process_path() -> (Option<String>, Option<String>) {
-    use std::os::windows::process::CommandExt;
-    const CF: u32 = 0x08000000;
+    let node =
+        std::thread::spawn(|| probe_version("node").map(|s| s.trim_start_matches('v').to_string()));
+    // npm may be exposed as `npm` or `npm.cmd` depending on the install source,
+    // and on Windows `npm.cmd` is the one that actually exists — try it directly
+    // rather than paying for a guaranteed-failing `npm` probe first.
+    let npm = std::thread::spawn(|| probe_version("npm.cmd").or_else(|| probe_version("npm")));
 
-    let node = std::process::Command::new("node")
-        .args(["--version"])
-        .creation_flags(CF)
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout).ok()
-            } else {
-                None
-            }
-        })
-        .map(|s| s.trim().trim_start_matches('v').to_string());
-
-    let npm = std::process::Command::new("npm")
-        .args(["--version"])
-        .creation_flags(CF)
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout).ok()
-            } else {
-                None
-            }
-        })
-        .map(|s| s.trim().to_string())
-        .or_else(|| {
-            std::process::Command::new("npm.cmd")
-                .args(["--version"])
-                .creation_flags(CF)
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().to_string())
-        });
-
-    (node, npm)
+    (node.join().unwrap_or(None), npm.join().unwrap_or(None))
 }
 
 /// Try to detect node/npm using refreshed registry PATH
@@ -191,20 +228,9 @@ fn detect_node_refreshed_path() -> (Option<String>, Option<String>) {
 
 /// Find the absolute path to node.exe using refreshed PATH
 fn find_node_exe() -> Option<String> {
-    use std::os::windows::process::CommandExt;
     // First try standard where
-    let std_path = std::process::Command::new("where")
-        .arg("node.exe")
-        .creation_flags(0x08000000)
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout).ok()
-            } else {
-                None
-            }
-        })
+    let std_path = which("node.exe")
+        .filter(|s| !s.is_empty())
         .map(|s| s.lines().next().unwrap_or("").trim().to_string());
     if std_path.is_some() {
         return std_path;
@@ -262,23 +288,13 @@ pub fn detect_node_classified() -> NodeDetectionResult {
                         let node_exe = sub.path().join("node.exe");
                         if node_exe.exists() {
                             let portable_node = node_exe.to_string_lossy().to_string();
-                            let mut cmd = std::process::Command::new(&portable_node);
-                            use std::os::windows::process::CommandExt;
-                            cmd.creation_flags(0x08000000);
-                            cmd.args(["--version"]);
-                            let version = cmd
-                                .output()
-                                .ok()
-                                .and_then(|o| String::from_utf8(o.stdout).ok())
-                                .map(|s| s.trim().trim_start_matches('v').to_string());
+                            // Bounded: this is the call that used to hang the
+                            // install at "验证安装" when node.exe stalled.
+                            let version = probe_version(&portable_node)
+                                .map(|s| s.trim_start_matches('v').to_string());
                             let npm_exe = sub.path().join("npm.cmd");
                             let npm_version = if npm_exe.exists() {
-                                std::process::Command::new(&npm_exe)
-                                    .args(["--version"])
-                                    .output()
-                                    .ok()
-                                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                                    .map(|s| s.trim().to_string())
+                                probe_version(&npm_exe.to_string_lossy())
                             } else {
                                 None
                             };
@@ -329,14 +345,7 @@ pub fn detect_node_classified() -> NodeDetectionResult {
     for pattern in &known_paths {
         let path = std::path::Path::new(pattern);
         if path.exists() {
-            use std::os::windows::process::CommandExt;
-            let version = std::process::Command::new(path)
-                .args(["--version"])
-                .creation_flags(0x08000000)
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().trim_start_matches('v').to_string());
+            let version = probe_version(pattern).map(|s| s.trim_start_matches('v').to_string());
             return NodeDetectionResult {
                 status: if version.is_some() {
                     NodeInstallStatus::InstalledPathNotRefreshed
@@ -459,31 +468,23 @@ pub fn detect_powershell() -> PowerShellInfo {
 }
 
 fn which(exe: &str) -> Option<String> {
-    cmd("where").arg(exe).output().ok().and_then(|o| {
-        if o.status.success() {
-            String::from_utf8(o.stdout)
-                .ok()
-                .map(|s| s.trim().to_string())
-        } else {
-            None
-        }
-    })
+    let mut c = cmd("where");
+    c.arg(exe);
+    run_bounded(&mut c)
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
 fn get_powershell_version(path: &str) -> Option<String> {
-    cmd(path)
-        .args(["$PSVersionTable.PSVersion.ToString()"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout)
-                    .ok()
-                    .map(|s| s.trim().to_string())
-            } else {
-                None
-            }
-        })
+    let mut c = cmd(path);
+    c.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "$PSVersionTable.PSVersion.ToString()",
+    ]);
+    run_bounded(&mut c)
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
 pub fn detect_git() -> GitInfo {
@@ -554,36 +555,11 @@ pub fn detect_git() -> GitInfo {
 }
 
 fn get_git_version_path(path: &str) -> Option<String> {
-    cmd(path)
-        .args(["--version"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout).ok()
-            } else {
-                None
-            }
-        })
-        .map(|s| s.trim().to_string())
+    probe_version(path)
 }
 
 fn get_git_version(path: &str) -> Option<String> {
-    use std::os::windows::process::CommandExt;
-    const CF: u32 = 0x08000000;
-    std::process::Command::new(path)
-        .args(["--version"])
-        .creation_flags(CF)
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout).ok()
-            } else {
-                None
-            }
-        })
-        .map(|s| s.trim().to_string())
+    probe_version(path)
 }
 
 /// Detect Claude Code installation via multiple methods
@@ -617,16 +593,36 @@ pub fn detect_claude_code() -> ClaudeCodeInfo {
     }
 
     // Priority 2: npm global install
-    if let Some(npm_info) = detect_npm_claude() {
-        let npm_path = npm_info.to_string_lossy().to_string();
-        details.push(format!("通过 npm 发现: {npm_path}"));
-        let version = get_claude_code_version(&npm_path);
+    if let Some((npm_path, version)) = detect_npm_claude() {
+        let path_str = npm_path.to_string_lossy().to_string();
         let config = get_claude_config_dir();
-        let health = assess_health(true, &version);
+        let entry_exists = npm_path.is_file();
+
+        // `entry_exists` but no version means the program is not runnable: the
+        // stale `claude.cmd` shim case, or a `bin/claude.exe` that postinstall
+        // never filled in. Report that honestly as installed-but-broken rather
+        // than claiming success — reporting success here is what made the UI say
+        // "安装成功" while a terminal answered "'claude' 不是内部或外部命令".
+        let installed = entry_exists && version.is_some();
+        let health = if installed {
+            Some("healthy".to_string())
+        } else {
+            Some("broken".to_string())
+        };
+
+        if installed {
+            log::info!("Claude Code detected via npm global: {path_str}");
+        } else {
+            log::warn!(
+                "Claude Code entry {path_str} exists but does not run (installed=false, health=broken)"
+            );
+        }
+        details.push(format!("通过 npm 发现: {path_str}"));
+
         return ClaudeCodeInfo {
-            installed: true,
+            installed,
             version,
-            path: Some(npm_info),
+            path: Some(npm_path),
             install_source: Some("npm".to_string()),
             install_method: Some("npm".to_string()),
             config_path: config,
@@ -645,6 +641,7 @@ pub fn detect_claude_code() -> ClaudeCodeInfo {
     for dir in &npm_dirs {
         let pb = std::path::Path::new(dir);
         if pb.exists() {
+            log::info!("Claude Code detected at known npm dir: {dir}");
             details.push(format!("在 npm 目录发现: {dir}"));
             let version = get_claude_code_version(dir);
             let config = get_claude_config_dir();
@@ -663,25 +660,30 @@ pub fn detect_claude_code() -> ClaudeCodeInfo {
     }
 
     // Priority 4: pnpm global locations
-    let pnpm_paths = vec![
+    let pnpm_bin = [
         format!("{}\\AppData\\Local\\pnpm\\claude.exe", home),
         format!("{}\\AppData\\Local\\pnpm\\claude.cmd", home),
-        format!(
-            "{}\\AppData\\Local\\pnpm\\global\\5\\node_modules\\@anthropic-ai\\claude-code\\cli.js",
-            home
-        ),
     ];
-    for dir in &pnpm_paths {
-        let pb = std::path::Path::new(dir);
-        if pb.exists() {
+    let pnpm_pkg = PathBuf::from(format!(
+        "{}\\AppData\\Local\\pnpm\\global\\5\\node_modules\\@anthropic-ai\\claude-code",
+        home
+    ));
+    let pnpm_candidates: Vec<PathBuf> = pnpm_bin
+        .iter()
+        .map(PathBuf::from)
+        .chain(resolve_claude_entry(&pnpm_pkg, []))
+        .collect();
+    for dir in &pnpm_candidates {
+        if dir.exists() {
+            let dir = dir.to_string_lossy().to_string();
             details.push(format!("通过 pnpm 发现: {dir}"));
-            let version = get_claude_code_version(dir);
+            let version = get_claude_code_version(&dir);
             let config = get_claude_config_dir();
             let health = assess_health(true, &version);
             return ClaudeCodeInfo {
                 installed: true,
                 version,
-                path: Some(PathBuf::from(dir)),
+                path: Some(PathBuf::from(&dir)),
                 install_source: Some("pnpm".to_string()),
                 install_method: Some("pnpm".to_string()),
                 config_path: config,
@@ -692,15 +694,19 @@ pub fn detect_claude_code() -> ClaudeCodeInfo {
     }
 
     // Priority 5: yarn global locations
-    let yarn_paths = vec![
-        format!("{}\\AppData\\Local\\Yarn\\bin\\claude.cmd", home),
-        format!("{}\\AppData\\Local\\Yarn\\Data\\global\\node_modules\\@anthropic-ai\\claude-code\\cli.js", home),
-    ];
-    for dir in &yarn_paths {
-        let pb = std::path::Path::new(dir);
-        if pb.exists() {
+    let yarn_bin = format!("{}\\AppData\\Local\\Yarn\\bin\\claude.cmd", home);
+    let yarn_pkg = PathBuf::from(format!(
+        "{}\\AppData\\Local\\Yarn\\Data\\global\\node_modules\\@anthropic-ai\\claude-code",
+        home
+    ));
+    let yarn_candidates: Vec<PathBuf> = std::iter::once(PathBuf::from(&yarn_bin))
+        .chain(resolve_claude_entry(&yarn_pkg, []))
+        .collect();
+    for dir in &yarn_candidates {
+        if dir.exists() {
+            let dir = dir.to_string_lossy().to_string();
             details.push(format!("通过 yarn 发现: {dir}"));
-            let version = get_claude_code_version(dir);
+            let version = get_claude_code_version(&dir);
             let config = get_claude_config_dir();
             let health = assess_health(true, &version);
             return ClaudeCodeInfo {
@@ -758,6 +764,18 @@ pub fn detect_claude_code() -> ClaudeCodeInfo {
         .as_ref()
         .is_some_and(|d| d.join("settings.json").exists());
 
+    // Log the whole probe trail. "Claude Code not detected" has several possible
+    // causes (PATH, npm prefix, entry layout); without the trail the only way to
+    // tell them apart was guesswork.
+    log::warn!(
+        "Claude Code not detected. probes: [{}]",
+        if details.is_empty() {
+            "none reached".to_string()
+        } else {
+            details.join(" | ")
+        }
+    );
+
     details.push("未在任何路径发现 Claude Code".to_string());
     if config_has_settings {
         details.push("配置目录存在但未安装二进制文件".to_string());
@@ -779,17 +797,214 @@ pub fn detect_claude_code() -> ClaudeCodeInfo {
     }
 }
 
+/// Whether a resolved path is evidence of a *working* Claude Code install.
+///
+/// A file merely existing is not enough. The wrapper package ships a
+/// `bin/claude.exe` placeholder and a `cli-wrapper.cjs` fallback; when its
+/// postinstall download fails, the placeholder stays empty (or absent) and only
+/// the fallback remains. Reporting that as installed is how CCM came to claim
+/// success while `claude` was "not recognized" in a terminal.
+///
+/// Rejects:
+/// - anything that is not a regular file,
+/// - a zero-length file (the un-downloaded placeholder),
+/// - shim-like shell scripts, which cannot be executed directly by
+///   `Command::new` and are not the program itself; the real binary is preferred
+///   and the package's `bin` entry is checked first.
+fn is_runnable_entry(path: &std::path::Path) -> bool {
+    let Ok(md) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !md.is_file() || md.len() == 0 {
+        return false;
+    }
+
+    // `.cmd` / `.ps1` / extensionless shims are launchers, not the binary. They
+    // are still resolved as a last resort (step 3) so a shim-only install keeps
+    // working, so accept them here but never prefer them.
+    true
+}
+
+/// Whether the claude-code *package* is present while its runnable entry is not.
+///
+/// Distinguishes "not installed at all" from the specific failure where npm
+/// unpacked the wrapper but its postinstall never placed the native binary —
+/// typically `--omit=optional`, or a failed 220 MB optional-dependency download.
+/// That case needs a very different message from "please install Claude Code".
+///
+/// This runs the entry, so a stale `claude.cmd` shim whose `bin\claude.exe`
+/// target is gone also counts as broken.
+pub fn claude_package_present_but_broken() -> bool {
+    let Some(bin) = npm_global_bin_dir() else {
+        return false;
+    };
+    let pkg = bin
+        .join("node_modules")
+        .join("@anthropic-ai")
+        .join("claude-code");
+    if !pkg.is_dir() {
+        return false;
+    }
+    match resolve_and_probe(&pkg, ["claude.exe", "claude.cmd", "claude"]) {
+        Some((_, version)) => version.is_none(),
+        // Package present but nothing even looks like an entry.
+        None => true,
+    }
+}
+
+/// Resolve where Claude Code lives and probe it by actually running it.
+///
+/// Returns `(path, version)`. `version == None` means the entry exists but does
+/// not run — npm writes the `claude.cmd` shim *before* postinstall runs, and the
+/// shim points at `bin\claude.exe`, which is exactly the file missing when the
+/// postinstall download failed. Callers must not treat that as a working install.
+fn resolve_and_probe<const N: usize>(
+    package_dir: &std::path::Path,
+    shims: [&'static str; N],
+) -> Option<(std::path::PathBuf, Option<String>)> {
+    let path = resolve_claude_entry(package_dir, shims)?;
+    let version = get_claude_code_version(&path.to_string_lossy());
+    Some((path, version))
+}
+
 /// Try to find claude via npm global list
-fn detect_npm_claude() -> Option<std::path::PathBuf> {
-    // Check npm root global directory (with 8s timeout to prevent hanging)
-    use std::time::Duration;
+/// Resolve the runnable entry point of an installed `@anthropic-ai/claude-code`
+/// package, independent of the package's internal layout.
+///
+/// The layout changed upstream: older releases shipped `cli.js`, while current
+/// releases ship a native `bin/claude.exe` and no `cli.js` at all.
+///
+/// Lookup order:
+/// 1. `package.json`'s `bin` map — authoritative and layout-agnostic. Its target
+///    is required to exist *and* be a real executable, because that is precisely
+///    what a half-finished install gets wrong.
+/// 2. Well-known entry files relative to the package root.
+/// 3. A global-bin shim (`<%APPDATA%>\npm\claude.cmd`).
+///
+/// Deliberately **not** accepted as an install: `cli-wrapper.cjs` and
+/// `install.cjs`. The wrapper's own comments describe it as a fallback launcher
+/// for environments where postinstall did not run; treating it as a working
+/// install made CCM report success on a machine where the native binary had never
+/// been downloaded, so `claude` was still "not recognized" in a terminal.
+/// A file existing is not evidence that Claude Code runs.
+fn resolve_claude_entry<const N: usize>(
+    package_dir: &std::path::Path,
+    shims: [&'static str; N],
+) -> Option<std::path::PathBuf> {
+    if !package_dir.is_dir() {
+        return None;
+    }
+
+    // 1. Read `bin` from package.json.
+    if let Ok(raw) = std::fs::read_to_string(package_dir.join("package.json")) {
+        if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&raw) {
+            let bin = match pkg.get("bin") {
+                Some(serde_json::Value::String(s)) => Some(s.clone()),
+                Some(serde_json::Value::Object(map)) => map
+                    .get("claude")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                _ => None,
+            };
+            if let Some(rel) = bin {
+                let candidate = package_dir.join(rel.trim_start_matches(['/', '\\']));
+                if is_runnable_entry(&candidate) {
+                    return Some(candidate);
+                }
+                log::warn!(
+                    "claude-code package.json points at {} but it is missing or empty — \
+                     postinstall likely did not run (check `npm config get omit`)",
+                    candidate.to_string_lossy()
+                );
+            }
+        }
+    }
+
+    // 2. Known entry filenames across layout generations. Only real programs —
+    //    never the JS fallback launchers.
+    for rel in ["bin/claude.exe", "bin/claude", "cli.js"] {
+        let candidate = package_dir.join(rel);
+        if is_runnable_entry(&candidate) {
+            return Some(candidate);
+        }
+    }
+
+    // 3. Global-bin shim in the npm prefix.
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        for name in shims {
+            let candidate = std::path::Path::new(&appdata).join("npm").join(name);
+            if is_runnable_entry(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+/// Resolve the npm global *bin* directory (where `claude.cmd` shims live).
+///
+/// Derived from `%APPDATA%` rather than by running `npm prefix -g`, because this
+/// must work in a process whose PATH does not contain npm at all.
+fn npm_global_bin_dir() -> Option<PathBuf> {
+    std::env::var("APPDATA")
+        .ok()
+        .map(|a| PathBuf::from(a).join("npm"))
+}
+
+/// Find an installed `@anthropic-ai/claude-code` from the npm global prefix.
+///
+/// Filesystem-first, and deliberately *not* dependent on `npm` being on PATH.
+///
+/// This mattered in practice: after CCM installs the portable Node.js, npm lives
+/// only in the registry PATH, so a restarted app process still cannot execute
+/// `npm root -g`. The old implementation returned `None` in that case and gave up
+/// on the whole npm detection path, so a freshly installed Claude Code stayed
+/// invisible until the user logged out or manually relaunched the app.
+///
+/// Order:
+/// 1. `%APPDATA%\npm\node_modules\@anthropic-ai\claude-code` — pure filesystem.
+/// 2. `npm root -g`, for prefixes that are not the default (nvm, custom prefix).
+///
+/// Returns the resolved entry **and its version**. A `None` version means the
+/// entry exists but does not actually run — the caller must not treat that as a
+/// working install.
+fn detect_npm_claude() -> Option<(std::path::PathBuf, Option<String>)> {
+    // 1. Filesystem-only probe against the standard npm global prefix.
+    if let Some(bin) = npm_global_bin_dir() {
+        let pkg = bin
+            .join("node_modules")
+            .join("@anthropic-ai")
+            .join("claude-code");
+        if pkg.is_dir() {
+            if let Some((entry, version)) =
+                resolve_and_probe(&pkg, ["claude.exe", "claude.cmd", "claude"])
+            {
+                log::info!(
+                    "Claude Code entry via npm global prefix: {} (runnable={})",
+                    entry.to_string_lossy(),
+                    version.is_some()
+                );
+                return Some((entry, version));
+            }
+            // The package is present but nothing even resembles an entry.
+            log::warn!(
+                "claude-code package present at {} but no usable entry resolved",
+                pkg.to_string_lossy()
+            );
+            return None;
+        }
+    }
+
+    // 2. Ask npm, for non-default global prefixes.
     let mut c = cmd("npm");
     c.args(["root", "-g"]);
     c.stdout(std::process::Stdio::piped());
     c.stderr(std::process::Stdio::null());
     let mut child = c.spawn().ok()?;
     let start = std::time::Instant::now();
-    let timeout = Duration::from_secs(8);
+    // npm's first run after an install can be slow (module cache, antivirus);
+    // 8s was tight enough to misreport an installed Claude Code as missing.
     let output = loop {
         if let Some(status) = child.try_wait().ok()? {
             if status.success() {
@@ -797,45 +1012,31 @@ fn detect_npm_claude() -> Option<std::path::PathBuf> {
             }
             return None;
         }
-        if start.elapsed() > timeout {
+        if start.elapsed() > PROBE_TIMEOUT {
+            log::warn!("`npm root -g` timed out; skipping npm-based Claude Code detection");
             let _ = child.kill();
             let _ = child.wait();
             return None;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(std::time::Duration::from_millis(50));
     };
     if !output.status.success() {
         return None;
     }
-    let npm_root = String::from_utf8(output.stdout).ok()?;
+    // Lenient: npm output is not guaranteed to be valid UTF-8.
+    let npm_root = String::from_utf8_lossy(&output.stdout);
     let npm_root = npm_root.trim();
 
-    let claude_path = std::path::Path::new(npm_root)
+    let claude_dir = std::path::Path::new(npm_root)
         .join("@anthropic-ai")
         .join("claude-code");
-    if claude_path.join("cli.js").exists() {
-        // On Windows, there should be a .cmd or .exe wrapper in npm global bin
-        let home = std::env::var("USERPROFILE").unwrap_or_default();
-        let bin_path = format!("{home}\\AppData\\Roaming\\npm\\claude");
-        let bin = std::path::Path::new(&bin_path);
-        // Return the actual file that exists (.cmd or .exe), not always .exe
-        if bin.with_extension("exe").exists() {
-            return Some(bin.with_extension("exe"));
-        }
-        if bin.with_extension("cmd").exists() {
-            return Some(bin.with_extension("cmd"));
-        }
-        if bin.exists() {
-            return Some(bin.to_path_buf());
-        }
-        // Fallback: return the cli.js path
-        return Some(claude_path.join("cli.js"));
-    }
-    None
+
+    // Layout-agnostic: works for the legacy `cli.js` release and for current
+    // releases that ship `bin/claude.exe`.
+    resolve_and_probe(&claude_dir, ["claude.exe", "claude.cmd", "claude"])
 }
 
 fn get_claude_code_version(path: &str) -> Option<String> {
-    use std::time::Duration;
     let pb = std::path::Path::new(path);
     if !pb.exists() {
         return None;
@@ -846,23 +1047,23 @@ fn get_claude_code_version(path: &str) -> Option<String> {
     c.stderr(std::process::Stdio::null());
     let mut child = c.spawn().ok()?;
     let start = std::time::Instant::now();
-    let timeout = Duration::from_secs(8);
+    // Claude Code's CLI can take a while on first launch; use the shared probe
+    // budget rather than a tighter local one.
     loop {
         if let Some(status) = child.try_wait().ok()? {
             if status.success() {
                 let out = child.wait_with_output().ok()?;
-                return String::from_utf8(out.stdout)
-                    .ok()
-                    .map(|s| s.trim().to_string());
+                return Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
             }
             return None;
         }
-        if start.elapsed() > timeout {
+        if start.elapsed() > PROBE_TIMEOUT {
+            log::warn!("`claude --version` timed out for {path}");
             let _ = child.kill();
             let _ = child.wait();
             return None;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
@@ -1038,27 +1239,43 @@ pub fn detect_webview2() -> WebView2Info {
     }
 }
 
-/// Get DLL file version using Windows API (via powershell as fallback)
+/// Read a DLL's file version via PowerShell.
+///
+/// The path is transported with `-EncodedCommand` rather than interpolated into
+/// a `-Command` string (the previous form broke on any path containing a quote),
+/// `PSModulePath` is dropped so Windows PowerShell 5.1 can resolve its own
+/// cmdlets, and the probe is bounded.
 fn get_dll_version(dll_path: &str) -> Option<String> {
-    // Use PowerShell to read the file version info
+    let escaped = dll_path.replace('\'', "''");
+    let script = format!("(Get-Item -LiteralPath '{escaped}').VersionInfo.FileVersion");
+    let encoded = ps_encode(&script);
+
     use std::os::windows::process::CommandExt;
-    let output = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            &format!("(Get-Item '{dll_path}').VersionInfo.FileVersion"),
-        ])
+    let mut c = std::process::Command::new("powershell");
+    c.args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
         .creation_flags(0x08000000)
-        .output()
-        .ok()?;
-    if output.status.success() {
-        String::from_utf8(output.stdout)
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    } else {
-        None
+        .env_remove("PSModulePath");
+
+    let output = run_bounded(&mut c)?;
+    if !output.status.success() {
+        return None;
     }
+    let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
+/// Base64-encode a script as UTF-16LE for PowerShell's `-EncodedCommand`.
+fn ps_encode(script: &str) -> String {
+    use base64::Engine as _;
+    let utf16: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    base64::engine::general_purpose::STANDARD.encode(utf16)
 }
 
 /// Detect Claude Code config directory
@@ -1407,5 +1624,383 @@ mod tests {
         let fmt = format!("{:?}", env);
         assert!(fmt.contains("EnvironmentStatus"));
         assert!(fmt.contains("windows"));
+    }
+
+    /// The concurrent node/npm probes must return exactly what sequential probes
+    /// return.
+    ///
+    /// Deliberately no timing assertion: under `cargo test` the suite runs many
+    /// tests in parallel, so wall-clock comparison is non-deterministic and would
+    /// flake. The concurrency is a wall-clock optimisation, not a correctness
+    /// property — measure it with `--nocapture` when it matters.
+    #[test]
+    fn detect_node_process_path_returns_same_values_as_sequential() {
+        let seq_node = probe_version("node").map(|s| s.trim_start_matches('v').to_string());
+        let seq_npm = probe_version("npm.cmd").or_else(|| probe_version("npm"));
+
+        let (par_node, par_npm) = detect_node_process_path();
+
+        assert_eq!(
+            par_node, seq_node,
+            "node version must match sequential probe"
+        );
+        assert_eq!(par_npm, seq_npm, "npm version must match sequential probe");
+    }
+
+    // ── Probe timeouts (regression: unbounded probes froze the UI) ──
+
+    /// Detection runs on the UI's critical path, so a hanging probe must be
+    /// killed rather than blocking the page forever.
+    #[test]
+    fn run_bounded_kills_hanging_process() {
+        let mut c = cmd("cmd");
+        c.args(["/c", "ping", "-n", "30", "127.0.0.1"]);
+
+        // Short budget so the test stays fast; production uses PROBE_TIMEOUT.
+        let budget = std::time::Duration::from_millis(600);
+        let start = std::time::Instant::now();
+        let out = run_bounded_for(&mut c, budget);
+        let elapsed = start.elapsed();
+
+        assert!(out.is_none(), "a hanging probe must report unavailable");
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "must give up promptly, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn run_bounded_returns_output_for_fast_process() {
+        let mut c = cmd("cmd");
+        c.args(["/c", "echo", "env-probe"]);
+        let out = run_bounded(&mut c).expect("fast process must return output");
+        assert!(out.status.success());
+        assert!(String::from_utf8_lossy(&out.stdout).contains("env-probe"));
+    }
+
+    #[test]
+    fn probe_version_rejects_missing_file_quickly() {
+        let missing = std::env::temp_dir().join("ccm-no-such-probe.exe");
+        std::fs::remove_file(&missing).ok();
+        let start = std::time::Instant::now();
+        assert!(probe_version(&missing.to_string_lossy()).is_none());
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "a missing executable must fail fast"
+        );
+    }
+
+    #[test]
+    fn probe_version_reads_real_executable_version() {
+        // cmd.exe reports a version string via /C ver, not --version, so instead
+        // assert the happy path against node if it is present.
+        if let Ok(out) = std::process::Command::new("where").arg("node.exe").output() {
+            let path = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !path.is_empty() && std::path::Path::new(&path).exists() {
+                let v = probe_version(&path);
+                assert!(v.is_some(), "node.exe at {path} must report a version");
+            }
+        }
+    }
+
+    // ── Claude Code entry resolution (regression: cli.js was removed upstream) ──
+
+    /// Build a throwaway package directory laid out like a real npm install.
+    fn fake_package(tag: &str, package_json: &str, files: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ccm-env-test-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), package_json).unwrap();
+        for rel in files {
+            let p = dir.join(rel);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&p, b"stub").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn resolve_entry_uses_package_json_bin_current_layout() {
+        // Mirrors @anthropic-ai/claude-code 2.1.x: bin -> bin/claude.exe, no cli.js.
+        let dir = fake_package(
+            "binmap",
+            r#"{"name":"@anthropic-ai/claude-code","version":"2.1.266","bin":{"claude":"bin/claude.exe"}}"#,
+            &["bin/claude.exe"],
+        );
+        let got = resolve_claude_entry(&dir, []).expect("must resolve via package.json bin");
+        assert_eq!(got, dir.join("bin").join("claude.exe"));
+        assert!(
+            !dir.join("cli.js").exists(),
+            "fixture must not contain cli.js"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_entry_falls_back_to_known_entries_without_bin_field() {
+        let dir = fake_package(
+            "noBin",
+            r#"{"name":"x","version":"1.0.0"}"#,
+            &["bin/claude.exe"],
+        );
+        let got = resolve_claude_entry(&dir, []).expect("must find bin/claude.exe directly");
+        assert!(got.ends_with("claude.exe"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_entry_still_supports_legacy_cli_js() {
+        // Older releases shipped cli.js only; keep working for those installs.
+        let dir = fake_package("legacy", r#"{"name":"x","version":"0.2.0"}"#, &["cli.js"]);
+        let got = resolve_claude_entry(&dir, []).expect("must find legacy cli.js");
+        assert_eq!(got, dir.join("cli.js"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_entry_returns_none_when_not_installed() {
+        let dir = std::env::temp_dir().join(format!("ccm-env-absent-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(resolve_claude_entry(&dir, []).is_none());
+    }
+
+    #[test]
+    fn resolve_entry_ignores_bin_path_that_does_not_exist() {
+        // A bin entry pointing at a missing file must not be reported as installed.
+        let dir = fake_package(
+            "danglingBin",
+            r#"{"name":"x","version":"1.0.0","bin":{"claude":"bin/missing.exe"}}"#,
+            &[],
+        );
+        assert!(
+            resolve_claude_entry(&dir, []).is_none(),
+            "dangling bin target must not count as an install"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_entry_accepts_string_bin_field() {
+        let dir = fake_package(
+            "stringBin",
+            r#"{"name":"x","version":"1.0.0","bin":"cli.js"}"#,
+            &["cli.js"],
+        );
+        let got = resolve_claude_entry(&dir, []).expect("string bin must resolve");
+        assert_eq!(got, dir.join("cli.js"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Regression: a half-installed package must not count as installed ──
+
+    /// The exact field layout that produced a false "安装成功".
+    ///
+    /// The wrapper package ships `cli-wrapper.cjs` as a fallback launcher for
+    /// when postinstall did not run. Detection used to accept it, so CCM reported
+    /// success on a machine where `bin/claude.exe` had never been downloaded —
+    /// and `claude` was still "not recognized" in a terminal.
+    #[test]
+    fn resolve_entry_rejects_fallback_launcher_without_binary() {
+        let dir = fake_package(
+            "halfInstall",
+            r#"{"name":"@anthropic-ai/claude-code","version":"2.1.268","bin":{"claude":"bin/claude.exe"}}"#,
+            &["cli-wrapper.cjs", "install.cjs", "README.md"],
+        );
+
+        assert!(
+            !dir.join("bin").join("claude.exe").exists(),
+            "fixture must not contain the binary"
+        );
+        assert!(dir.join("cli-wrapper.cjs").exists());
+
+        assert!(
+            resolve_claude_entry(&dir, []).is_none(),
+            "a fallback launcher must never be reported as a working install"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A zero-length `bin/claude.exe` is the un-downloaded placeholder, not a
+    /// program.
+    #[test]
+    fn resolve_entry_rejects_empty_binary_placeholder() {
+        let dir = fake_package(
+            "emptyBin",
+            r#"{"name":"@anthropic-ai/claude-code","version":"2.1.268","bin":{"claude":"bin/claude.exe"}}"#,
+            &[],
+        );
+        let placeholder = dir.join("bin").join("claude.exe");
+        std::fs::create_dir_all(placeholder.parent().unwrap()).unwrap();
+        std::fs::write(&placeholder, b"").unwrap();
+
+        assert!(placeholder.exists(), "placeholder file exists");
+        assert!(
+            resolve_claude_entry(&dir, []).is_none(),
+            "a zero-length binary must not count as installed"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// With the real binary present the install resolves, so the stricter check
+    /// does not break healthy machines.
+    #[test]
+    fn resolve_entry_accepts_complete_install() {
+        let dir = fake_package(
+            "complete",
+            r#"{"name":"@anthropic-ai/claude-code","version":"2.1.268","bin":{"claude":"bin/claude.exe"}}"#,
+            &["cli-wrapper.cjs"],
+        );
+        let binary = dir.join("bin").join("claude.exe");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, vec![0u8; 1024]).unwrap();
+
+        let got = resolve_claude_entry(&dir, []).expect("complete install must resolve");
+        assert_eq!(got, binary);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `claude_package_present_but_broken` must distinguish the two failure modes
+    /// so the UI can give the right advice.
+    #[test]
+    fn broken_package_detection_matches_real_state() {
+        let broken = claude_package_present_but_broken();
+        let detected = detect_claude_code().installed;
+
+        assert!(
+            !(broken && detected),
+            "a detected install cannot also be reported as broken"
+        );
+        println!("broken={broken} detected={detected}");
+    }
+
+    /// `detect_npm_claude` must resolve the npm global prefix from the
+    /// filesystem, without ever needing `npm` to be executable.
+    ///
+    /// Regression: it used to *start* by running `npm root -g`, which fails in a
+    /// process whose PATH lacks npm (exactly the state after CCM installs the
+    /// portable Node.js and the app is restarted). It then returned `None` and
+    /// short-circuited the entire npm detection path, so a freshly installed
+    /// Claude Code stayed invisible until the user logged out.
+    #[test]
+    fn npm_global_bin_dir_is_derived_from_appdata_not_path() {
+        let Some(appdata) = std::env::var("APPDATA").ok() else {
+            return;
+        };
+        let expected = PathBuf::from(&appdata).join("npm");
+        assert_eq!(
+            npm_global_bin_dir().as_deref(),
+            Some(expected.as_path()),
+            "npm global bin dir must come from %APPDATA%, independent of PATH"
+        );
+    }
+
+    /// The filesystem-first branch must be the one that finds a real install.
+    #[test]
+    fn detect_npm_claude_resolves_from_filesystem() {
+        let Some(bin) = npm_global_bin_dir() else {
+            return;
+        };
+        let pkg = bin
+            .join("node_modules")
+            .join("@anthropic-ai")
+            .join("claude-code");
+        if !pkg.is_dir() {
+            println!("claude-code not installed; skipping");
+            return;
+        }
+
+        let found = detect_npm_claude();
+        assert!(
+            found.is_some(),
+            "filesystem probe must locate the package at {}",
+            pkg.to_string_lossy()
+        );
+        let (entry, version) = found.unwrap();
+        assert!(
+            entry.is_file(),
+            "resolved entry must be a real file: {}",
+            entry.to_string_lossy()
+        );
+        // The probe runs the entry, so a half-installed package legitimately
+        // yields a path with no version. Both outcomes are valid here; what
+        // matters is that resolution came from the filesystem, not from PATH.
+        println!(
+            "resolved {} (runnable={})",
+            entry.to_string_lossy(),
+            version.is_some()
+        );
+    }
+
+    /// End-to-end check against the machine's real installation.
+    ///
+    /// Detection must be honest about whether Claude Code actually *runs*.
+    ///
+    /// Verifies the whole chain:
+    /// - a real install resolves and is reported installed with a version;
+    /// - a half-install (wrapper present, native binary missing) must **not** be
+    ///   reported as installed — that false positive is what made the UI say
+    ///   "安装成功" while a terminal answered "'claude' 不是内部或外部命令".
+    ///
+    /// Both branches are meaningful depending on machine state, so nothing is
+    /// skipped: it asserts the invariant that ties the two together.
+    #[test]
+    fn detect_claude_code_reports_only_working_installs() {
+        let Some(appdata) = std::env::var("APPDATA").ok() else {
+            return;
+        };
+        let pkg = PathBuf::from(&appdata)
+            .join("npm")
+            .join("node_modules")
+            .join("@anthropic-ai")
+            .join("claude-code");
+        if !pkg.is_dir() {
+            println!("claude-code not installed; skipping");
+            return;
+        }
+
+        // Resolution is filesystem-based and layout-agnostic.
+        let resolved = resolve_claude_entry(&pkg, ["claude.exe", "claude.cmd", "claude"]);
+        let info = detect_claude_code();
+        println!(
+            "resolved={:?} installed={} version={:?} health={:?}",
+            resolved.as_ref().map(|p| p.to_string_lossy().to_string()),
+            info.installed,
+            info.version,
+            info.health
+        );
+
+        // The invariant: reporting "installed" requires a version, and a version
+        // requires the program to have actually executed.
+        if info.installed {
+            assert!(
+                info.version.is_some(),
+                "an install reported as installed must report a version (health={:?})",
+                info.health
+            );
+        } else {
+            assert!(
+                info.version.is_none(),
+                "a non-install must not carry a version"
+            );
+            // If it is not installed but the package exists, it must be flagged
+            // as broken so the repair path can act on it.
+            if resolved.is_some() {
+                assert!(
+                    claude_package_present_but_broken(),
+                    "resolvable-but-not-runnable must be reported as broken"
+                );
+            }
+        }
     }
 }

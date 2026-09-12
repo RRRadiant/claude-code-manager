@@ -211,12 +211,18 @@ pub struct McpServerDef {
 ```
 User Input (masked) → Rust Frontend → IPC → Rust Backend
                                               ↓
-                                    Windows Credential Manager
+                                    Windows Credential Manager   (CCM copy)
                                               ↓
-                                    Config stores credentialId only
+                          ~/.claude/settings.json env.ANTHROPIC_AUTH_TOKEN
                                               ↓
-                                    Log entry: [CREDENTIAL ref: provider/deepseek]
+                              Log entry: [CREDENTIAL ref: provider/deepseek]
 ```
+
+> **Note:** the key is written into Claude Code's own `settings.json` in
+> plaintext, because Claude Code reads that field as a literal token and cannot
+> resolve a credential reference. An earlier design stored a `credentialId`
+> reference there; Claude Code sent it verbatim and every request 401'd. See
+> `docs/security.md` §2 for the trade-off and the safeguards.
 
 ### IPC Security
 - Tauri capabilities limited to specific command names
@@ -375,8 +381,13 @@ Each API provider has a standalone Rust struct implementing `ProviderAdapter`. T
 ### Decision 2: Push-Based Progress Over Polling
 Long-running operations (install, MCP test, update download) emit Tauri events. The frontend subscribes and updates UI reactively. No `setInterval` polling.
 
-### Decision 3: Credential Manager References Over Plaintext
-Config files store `credentialId` references, not actual API keys. The Rust backend resolves credentials at runtime when needed (test connection, start Claude Code).
+### Decision 3: Literal Token in settings.json Over Credential References
+Claude Code reads `env.ANTHROPIC_AUTH_TOKEN` from its own `settings.json` as a
+literal value and has no concept of a credential reference. CCM therefore keeps
+its own copy in the Windows Credential Manager **and** writes the resolved token
+into `settings.json`, reporting that fact (and the backup) back to the UI.
+Writing a `credentialId` reference there was tried and rejected: Claude Code sent
+the placeholder as the bearer token and every request failed with 401.
 
 ### Decision 4: NSIS Over MSI for ARM64
 Due to WiX/MSI ARM64 limitations in Tauri, use NSIS for ARM64 builds. x64 builds can offer both MSI and NSIS.

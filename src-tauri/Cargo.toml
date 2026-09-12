@@ -31,6 +31,13 @@ tokio = { version = "1", features = ["full"] }
 log = "0.4"
 regex = "1"
 
+# Base64 for PowerShell `-EncodedCommand` (injection-safe script transport)
+base64 = "0.22"
+
+# In-process zip extraction. Replaces PowerShell's `Expand-Archive`, which is
+# several times slower; this is also the fallback when `tar.exe` is unavailable.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 # Date/Time
 chrono = { version = "0.4", features = ["serde"] }
 
@@ -39,7 +46,7 @@ uuid = { version = "1", features = ["v4"] }
 
 # Windows-specific
 [target.'cfg(windows)'.dependencies]
-keyring = "3"
+keyring = { version = "3", features = ["windows-native"] }
 winreg = "0.52"
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Environment"] }
 
@@ -50,3 +57,38 @@ async-trait = "0.1"
 
 # Streaming download
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+# ===== Build profiles =====
+#
+# Without this, `target/` had grown to 14.3 GB locally — a single debug
+# `app_lib.lib` was ~1 GB and each `.pdb` 100–150 MB, multiplied by every
+# feature/hash variant produced while iterating.
+#
+# Debug info is what dominates that size, and it is not needed here:
+#   * panic messages and `RUST_BACKTRACE=1` still give file/line and a symbolised
+#     trace (they need symbol *names*, which are kept regardless);
+#   * what `debug = false` gives up is stepping through frames in a native
+#     debugger — a rare workflow for a Tauri app whose logic is testable in Rust.
+# Add `debug = "line-tables-only"` instead if line-level debugger stepping is
+# ever needed; it is a small fraction of full debug info.
+
+# Local dev/test builds: keep them lean.
+[profile.dev]
+debug = false
+incremental = true
+
+# Third-party crates never need debug info in any profile.
+[profile.dev.package."*"]
+debug = false
+
+[profile.test]
+debug = false
+
+[profile.test.package."*"]
+debug = false
+
+# Release: strip symbols from the shipped binary too.
+[profile.release]
+debug = false
+strip = true
+
