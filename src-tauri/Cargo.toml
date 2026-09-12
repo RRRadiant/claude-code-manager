@@ -1,6 +1,6 @@
 [package]
 name = "claude-code-manager"
-version = "0.1.0"
+version = "2.0.0"
 description = "Claude Code Manager - Windows GUI for Claude Code"
 authors = ["Claude Code Manager Contributors"]
 license = "MIT"
