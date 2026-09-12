@@ -484,13 +484,18 @@ async fn benchmark_source(source_url: &str) -> Option<u64> {
 
 /// Pick the fastest reachable candidate URL, probing all of them concurrently.
 ///
-/// Returns `(url, id)` of the winner, or the first candidate as a last resort
-/// when nothing answered.
+/// Returns `(url, id)` of the winner, or the caller's first candidate as a last
+/// resort when nothing answered.
 ///
 /// Concurrency matters: probing sequentially could accumulate one timeout per
 /// unreachable mirror before the download even started. This is shared by the
 /// Node.js and Git downloads because both pick between several mirrors of the
 /// same artifact.
+///
+/// The decision itself lives in [`pick_fastest`], which is pure and therefore
+/// testable without depending on external hosts — timing a real HTTP race in a
+/// unit test is inherently flaky (CI runners have been observed to time out on a
+/// mirror that answers instantly elsewhere).
 async fn select_fastest_candidate(candidates: Vec<(String, String)>) -> (String, String) {
     use futures_util::future::join_all;
 
@@ -499,22 +504,43 @@ async fn select_fastest_candidate(candidates: Vec<(String, String)>) -> (String,
         (id.clone(), latency, url.clone())
     });
 
-    let mut reachable: Vec<(u64, String, String)> = join_all(probes)
-        .await
+    let measured: Vec<(String, Option<u64>, String)> = join_all(probes).await;
+    pick_fastest(&candidates, measured)
+}
+
+/// Choose among probe results: fastest responder wins, else the caller's first
+/// candidate is returned so the subsequent download surfaces a real error.
+///
+/// `measured` carries `None` for candidates that did not answer at all; those can
+/// never be selected while any other candidate responded.
+///
+/// Uses `min_by_key`, which keeps the first minimum on ties: if nothing responded
+/// every entry compares equal and the caller's ordering is preserved.
+/// (`sort_by_key` would not do — it is not stable, so an all-`None` input came
+/// back in an arbitrary order.)
+fn pick_fastest(
+    candidates: &[(String, String)],
+    measured: Vec<(String, Option<u64>, String)>,
+) -> (String, String) {
+    measured
         .into_iter()
-        .filter_map(|(id, latency, url)| latency.map(|lat| (lat, id, url)))
-        .collect();
-
-    reachable.sort_by_key(|(lat, _, _)| *lat);
-
-    reachable.into_iter().next().map_or_else(
-        || {
-            // Nothing responded — fall back to the first candidate rather than
-            // failing outright; the download itself will surface the error.
-            candidates.into_iter().next().unwrap_or_default()
-        },
-        |(_lat, id, url)| (url, id),
-    )
+        .min_by_key(|(_, latency, _)| latency.unwrap_or(u64::MAX))
+        .filter(|(_, latency, _)| latency.is_some())
+        .map_or_else(
+            // Nothing answered — keep the caller's ordering rather than whichever
+            // probe happened to finish first.
+            //
+            // The caller's tuples are `(id, url)`; this function returns
+            // `(url, id)`, so they must be swapped here too. Returning the tuple
+            // as-is silently handed the *id* back as the URL.
+            || {
+                candidates.first().map_or_else(
+                    || (String::new(), String::new()),
+                    |(id, url)| (url.clone(), id.clone()),
+                )
+            },
+            |(id, _, url)| (url, id),
+        )
 }
 
 /// Pick the fastest reachable mirror for a Node.js archive.
@@ -2872,51 +2898,143 @@ mod tests {
 
     // ── Multi-source racing ─────────────────────────────────────
 
-    /// A candidate list containing a dead entry must still select the live one,
-    /// and must be bounded by a single probe timeout rather than the sum.
-    ///
-    /// Regression: the Git download used a *fixed* order with GitHub first. When
-    /// that host was unreachable (observed: TLS handshake failure) the installer
-    /// sat on it until the attempt finished — 101 seconds in one reported run —
-    /// before falling back to a mirror that was up.
-    #[tokio::test]
-    async fn select_fastest_candidate_skips_dead_source() {
+    /// The fastest responder must win, regardless of where it sits in the list.
+    #[test]
+    fn pick_fastest_prefers_lowest_latency() {
         let candidates = vec![
-            // Reserved TEST-NET-1 address: guaranteed unroutable.
+            ("slow".to_string(), "https://slow.example/x".to_string()),
+            ("fast".to_string(), "https://fast.example/x".to_string()),
+            ("dead".to_string(), "https://dead.example/x".to_string()),
+        ];
+        let measured = vec![
+            (
+                "slow".to_string(),
+                Some(900),
+                "https://slow.example/x".to_string(),
+            ),
+            (
+                "fast".to_string(),
+                Some(30),
+                "https://fast.example/x".to_string(),
+            ),
             (
                 "dead".to_string(),
-                "https://192.0.2.1/git-installer.exe".to_string(),
+                None,
+                "https://dead.example/x".to_string(),
+            ),
+        ];
+
+        let (url, id) = pick_fastest(&candidates, measured);
+        assert_eq!(id, "fast");
+        assert_eq!(url, "https://fast.example/x");
+    }
+
+    /// A non-responder must never be chosen while anything answered.
+    ///
+    /// Note this is about *outcomes*, not timing: a mirror that fails fast (a
+    /// refused connection) must not beat a slower mirror that actually serves the
+    /// file.
+    #[test]
+    fn pick_fastest_never_selects_a_non_responder() {
+        let candidates = vec![
+            ("dead".to_string(), "https://dead.example/x".to_string()),
+            ("live".to_string(), "https://live.example/x".to_string()),
+        ];
+        // The dead candidate is "first" and would win a naive first-wins loop.
+        let measured = vec![
+            (
+                "dead".to_string(),
+                None,
+                "https://dead.example/x".to_string(),
             ),
             (
                 "live".to_string(),
-                "https://npmmirror.com/mirrors/git-for-windows/v2.45.2.windows.1/Git-2.45.2-64-bit.exe".to_string(),
+                Some(2500),
+                "https://live.example/x".to_string(),
             ),
+        ];
+
+        let (url, id) = pick_fastest(&candidates, measured);
+        assert_eq!(id, "live", "a non-responder must not be selected");
+        assert_eq!(url, "https://live.example/x");
+    }
+
+    /// When nothing responds the caller's own ordering is kept, so the download
+    /// reports a real error against the preferred source rather than an arbitrary
+    /// one. Needs no network, so it is trustworthy on CI.
+    #[test]
+    fn pick_fastest_keeps_caller_order_when_nothing_responds() {
+        let candidates = vec![
+            ("first".to_string(), "https://first.example/x".to_string()),
+            ("second".to_string(), "https://second.example/x".to_string()),
+        ];
+        let measured = vec![
+            (
+                "second".to_string(),
+                None,
+                "https://second.example/x".to_string(),
+            ),
+            (
+                "first".to_string(),
+                None,
+                "https://first.example/x".to_string(),
+            ),
+        ];
+
+        let (url, id) = pick_fastest(&candidates, measured);
+        // Returned as `(url, id)`.
+        assert_eq!(url, "https://first.example/x");
+        assert_eq!(
+            id, "first",
+            "must fall back to the caller's first candidate"
+        );
+    }
+
+    #[test]
+    fn pick_fastest_handles_empty_input() {
+        let (url, id) = pick_fastest(&[], Vec::new());
+        assert!(url.is_empty());
+        assert!(id.is_empty());
+    }
+
+    /// `benchmark_source` must reject an unroutable host, so such a mirror can
+    /// never be selected as a download source.
+    ///
+    /// Regression: the Git download used a *fixed* order with GitHub first. When
+    /// that host was unreachable, the installer sat on it until the attempt
+    /// finished — 101 seconds in one reported run — before trying a mirror that
+    /// was up. Racing removes that wait; this asserts the probe reports the dead
+    /// host as unusable rather than "fast" because it failed quickly.
+    #[tokio::test]
+    async fn benchmark_source_rejects_unroutable_host() {
+        // RFC 5737 TEST-NET-1: reserved, never routed.
+        let latency = benchmark_source("https://192.0.2.1/does-not-exist.exe").await;
+        assert!(
+            latency.is_none(),
+            "an unroutable host must not be reported as a usable source"
+        );
+    }
+
+    /// The whole race must be bounded by a single probe timeout, not the sum of
+    /// attempts. Uses only unroutable hosts, so it needs no network and cannot
+    /// flake on CI.
+    #[tokio::test]
+    async fn select_fastest_candidate_is_bounded_for_all_dead_inputs() {
+        let candidates = vec![
+            ("dead1".to_string(), "https://192.0.2.1/a.exe".to_string()),
+            ("dead2".to_string(), "https://192.0.2.2/b.exe".to_string()),
         ];
 
         let start = std::time::Instant::now();
         let (url, id) = select_fastest_candidate(candidates).await;
         let elapsed = start.elapsed();
 
-        assert_eq!(id, "live", "must pick the reachable mirror, picked {id}");
-        assert!(url.contains("npmmirror"), "unexpected url: {url}");
-        assert!(
-            elapsed < Duration::from_secs(20),
-            "racing must not wait out every candidate, took {elapsed:?}"
-        );
-    }
-
-    /// With every candidate unreachable the function must still return a usable
-    /// pair so the caller reports a real download error instead of panicking or
-    /// attempting an empty URL.
-    #[tokio::test]
-    async fn select_fastest_candidate_falls_back_when_nothing_responds() {
-        let candidates = vec![
-            ("dead1".to_string(), "https://192.0.2.1/a.exe".to_string()),
-            ("dead2".to_string(), "https://192.0.2.2/b.exe".to_string()),
-        ];
-        let (url, id) = select_fastest_candidate(candidates).await;
         assert!(!url.is_empty(), "must return a non-empty url to attempt");
         assert!(!id.is_empty(), "must return an id for logging");
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "must be bounded by one probe timeout, took {elapsed:?}"
+        );
     }
 
     #[tokio::test]
