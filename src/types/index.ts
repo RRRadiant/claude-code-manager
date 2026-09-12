@@ -163,6 +163,24 @@ export interface ConnectionTestResult {
   error_code: string | null;
 }
 
+/** Detected existing Claude Code API config (from settings.json / env vars). */
+export interface DetectedClaudeConfig {
+  found: boolean;
+  source: string | null;
+  provider_hint: string | null;
+  base_url: string | null;
+  model: string | null;
+  has_api_key: boolean;
+  api_key_masked: string | null;
+}
+
+/** Result of importing an existing Claude Code configuration into CCM. */
+export interface ImportResult {
+  success: boolean;
+  message: string;
+  provider_type: string;
+}
+
 // ===== Config Types =====
 
 export type ConfigScope = 'user' | 'project' | 'local' | 'managed';

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { ModelInfo, ProviderConfigDraft } from '../types'
+import type { ModelInfo, ProviderConfigDraft, DetectedClaudeConfig } from '../types'
 import { GlassCard } from '../components/glass'
 import * as api from '../services/tauri'
 
@@ -53,10 +53,85 @@ const FIELD_MAP: Record<ProviderKey, FieldDef[]> = {
 
 export default function ProvidersPage() {
   const [tab, setTab] = useState<ProviderKey>('anthropic')
+  const [detected, setDetected] = useState<DetectedClaudeConfig | null>(null)
+  const [detecting, setDetecting] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importMsg, setImportMsg] = useState<{ success: boolean; message: string } | null>(null)
+  const [reloadToken, setReloadToken] = useState(0)
+
+  const handleDetect = async () => {
+    setDetecting(true)
+    setDetected(null)
+    setImportMsg(null)
+    try {
+      setDetected(await api.detectExistingClaudeConfig())
+    } catch (e) {
+      setImportMsg({ success: false, message: api.errorMessage(e) })
+    } finally {
+      setDetecting(false)
+    }
+  }
+
+  const handleImport = async () => {
+    if (!detected || !detected.found) return
+    const target = (detected.provider_hint as ProviderKey) ?? tab
+    setImporting(true)
+    setImportMsg(null)
+    try {
+      const r = await api.importExistingClaudeConfig(target)
+      setImportMsg({ success: r.success, message: r.message })
+      if (r.success) {
+        setTab(r.provider_type as ProviderKey)
+        setReloadToken(t => t + 1)
+        setDetected(null)
+      }
+    } catch (e) {
+      setImportMsg({ success: false, message: api.errorMessage(e) })
+    } finally {
+      setImporting(false)
+    }
+  }
 
   return (
     <div className="page">
       <h1 style={{ marginBottom: 'var(--s4)' }}>API 与模型</h1>
+
+      {/* 检测已有 Claude Code 配置 */}
+      <GlassCard blur={10} tint="rgba(255,255,255,0.05)" style={{ padding: 'var(--s3)', marginBottom: 'var(--s4)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s2)', flexWrap: 'wrap' }}>
+          <button className="btn btn-ghost" onClick={handleDetect} disabled={detecting}>
+            {detecting ? '检测中...' : '检测已有配置'}
+          </button>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
+            识别已手动配置好的 Claude Code（~/.claude/settings.json 或环境变量）
+          </span>
+        </div>
+
+        {detected && detected.found && (
+          <div style={{ marginTop: 'var(--s2)' }}>
+            <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 'var(--s1)' }}>
+              检测到已有 Claude Code 配置{detected.source ? `（来源：${detected.source}）` : ''}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+              {detected.base_url && <div>Base URL：{detected.base_url}</div>}
+              {detected.model && <div>默认模型：{detected.model}</div>}
+              {detected.has_api_key && <div>API Key：已设置（{detected.api_key_masked}）</div>}
+              {detected.provider_hint && (
+                <div>建议 Provider：{PROVIDERS.find(p => p.key === (detected.provider_hint as ProviderKey))?.name ?? detected.provider_hint}</div>
+              )}
+            </div>
+            <button className="btn btn-primary" style={{ marginTop: 'var(--s2)' }} onClick={handleImport} disabled={importing}>
+              {importing ? '导入中...' : '一键导入'}
+            </button>
+          </div>
+        )}
+        {detected && !detected.found && (
+          <div style={{ marginTop: 'var(--s2)', fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
+            未检测到已有 Claude Code 配置。
+          </div>
+        )}
+        {importMsg && <ResultBox success={importMsg.success} message={importMsg.message} />}
+      </GlassCard>
 
       {/* Provider cards as glass tabs */}
       <div style={{ display: 'flex', gap: 'var(--s1)', marginBottom: 'var(--s4)' }}>
@@ -79,7 +154,7 @@ export default function ProvidersPage() {
       </div>
 
       {/* Form */}
-      <ProviderForm key={tab} providerType={tab} title={`${PROVIDERS.find(p => p.key === tab)!.name} — ${tab === 'custom' ? '自定义服务商' : '官方'}`} fields={FIELD_MAP[tab]} />
+      <ProviderForm key={`${tab}-${reloadToken}`} providerType={tab} title={`${PROVIDERS.find(p => p.key === tab)!.name} — ${tab === 'custom' ? '自定义服务商' : '官方'}`} fields={FIELD_MAP[tab]} />
     </div>
   )
 }
@@ -176,7 +251,7 @@ function ProviderForm({ providerType, title, fields }: { providerType: ProviderK
     setResults(prev => ({ ...prev, save: null }))
     try {
       const apiKey = values['api_key']?.trim()
-      await api.saveProviderConfig(
+      const res = await api.saveProviderConfig(
         providerType,
         values['name'] || providerType,
         values['base_url'] || undefined,
@@ -187,7 +262,9 @@ function ProviderForm({ providerType, title, fields }: { providerType: ProviderK
         values['custom_headers'] || undefined,
         apiKey || undefined,
       )
-      setResults(prev => ({ ...prev, save: { success: true, message: '配置已保存到 Claude Code 设置' } }))
+      // Surface the backend's own message: it states where the credential was
+      // stored, instead of implying the key only lives in the Credential Manager.
+      setResults(prev => ({ ...prev, save: { success: res.success, message: res.message } }))
     } catch (e) {
       setResults(prev => ({ ...prev, save: { success: false, message: api.errorMessage(e) } }))
     } finally {
@@ -211,6 +288,11 @@ function ProviderForm({ providerType, title, fields }: { providerType: ProviderK
           <div key={f.key}>
             <label style={{ fontSize: 'var(--text-sm)', fontWeight: 500, marginBottom: 'var(--s0)', display: 'block' }}>{f.label}</label>
             {f.hint && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginBottom: 'var(--s0)' }}>{f.hint}</div>}
+            {f.key === 'api_key' && existingKeyMask && (
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', marginBottom: 'var(--s0)' }}>
+                已配置：{existingKeyMask} · 重新输入将覆盖
+              </div>
+            )}
             {f.type === 'textarea' ? (
               <textarea
                 className="input textarea" rows={3}
@@ -222,7 +304,7 @@ function ProviderForm({ providerType, title, fields }: { providerType: ProviderK
               <input
                 type={f.password ? 'password' : 'text'}
                 className="input"
-                placeholder={f.key === 'api_key' && existingKeyMask ? `已配置（${existingKeyMask}）·重新输入将覆盖` : f.placeholder}
+                placeholder={f.placeholder}
                 value={values[f.key] ?? ''}
                 onChange={e => setVal(f.key, e.target.value)}
               />

@@ -34,8 +34,10 @@ function App() {
   const detect = useEnvironmentStore((s) => s.detect)
   const consoleAdd = useConsoleStore((s) => s.add)
   const setActiveTask = useConsoleStore((s) => s.setActiveTask)
+  const setDownload = useConsoleStore((s) => s.setDownload)
   const [currentPage, setCurrentPage] = useState<PageId>('home')
   const [restartPrompt, setRestartPrompt] = useState(false)
+  const [restartStage, setRestartStage] = useState<'base_environment' | 'claude_code'>('base_environment')
   const restartDialogRef = useRef<HTMLDivElement>(null)
 
   // Sync document attributes from global preferences.
@@ -83,11 +85,13 @@ function App() {
       if (p.status === 'Success') {
         consoleAdd(`[${p.title}] ✓ 完成`, 'success')
         setActiveTask({ id: '', title: '', step: '', progress: 100, status: 'success' })
+        setDownload(null)
         timers.push(setTimeout(() => setActiveTask(null), 3000))
       }
       if (p.status === 'Failed') {
         consoleAdd(`[${p.title}] ✗ 失败`, 'error')
         setActiveTask({ id: '', title: '', step: '', progress: 0, status: 'failed' })
+        setDownload(null)
       }
     }).then(u => unsubs.push(u))
 
@@ -97,9 +101,36 @@ function App() {
       detect()
     }).then(u => unsubs.push(u))
 
-    // Listen for restart-required (base env installed, need restart for Claude Code)
-    listen<void>('restart-required', () => {
-      consoleAdd('Node.js 和 Git 安装完成，需要重启以继续安装 Claude Code', 'info')
+    // Fine-grained download progress. Only the primary download (Node.js) is
+    // shown: Node.js and Git run in parallel, and tracking both would make the
+    // percentage oscillate. Cleared when the task leaves the running state.
+    listen<{
+      component: string; primary: boolean; percent: number
+      speed_bytes_per_sec: number; downloaded_bytes: number; total_bytes: number
+    }>('download-progress', e => {
+      const p = e.payload
+      if (!p.primary) return
+      setDownload({
+        component: p.component,
+        percent: p.percent,
+        speedBytesPerSec: p.speed_bytes_per_sec,
+        downloadedBytes: p.downloaded_bytes,
+        totalBytes: p.total_bytes,
+      })
+    }).then(u => unsubs.push(u))
+
+    // Listen for restart-required. The backend tells us *why*, because the two
+    // cases need different wording: the base environment is only half the job,
+    // while a finished Claude Code install just is not visible to this process.
+    listen<{ stage: 'base_environment' | 'claude_code' }>('restart-required', e => {
+      const stage = e.payload?.stage ?? 'base_environment'
+      setRestartStage(stage)
+      consoleAdd(
+        stage === 'claude_code'
+          ? 'Claude Code 安装完成，需重启应用后才能检测到它'
+          : 'Node.js 和 Git 安装完成，需重启应用后再安装 Claude Code',
+        'success',
+      )
       setRestartPrompt(true)
     }).then(u => unsubs.push(u))
 
@@ -108,7 +139,7 @@ function App() {
       timers.forEach(clearTimeout)
       unsubs.forEach(fn => fn())
     }
-  }, [detect, consoleAdd, setActiveTask])
+  }, [detect, consoleAdd, setActiveTask, setDownload])
 
   // Restart dialog: Esc close + initial focus.
   useEffect(() => {
@@ -163,11 +194,42 @@ function App() {
             boxShadow: '0 24px 80px rgba(0,0,0,0.3)',
             textAlign: 'center',
           }}>
-            <h3 style={{ marginBottom: 'var(--s2)' }}>基础环境安装完成</h3>
-            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: 'var(--s4)', lineHeight: 1.6 }}>
-              Node.js 和 Git 已成功安装。<br />
-              需要重启应用以加载最新环境变量，然后继续安装 Claude Code。
-            </p>
+            <h3 style={{ marginBottom: 'var(--s2)' }}>
+              {restartStage === 'claude_code' ? 'Claude Code 安装完成' : '基础环境安装完成'}
+            </h3>
+            {restartStage === 'claude_code' ? (
+              <>
+                <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: 'var(--s2)', lineHeight: 1.6 }}>
+                  Claude Code 已安装成功。<br />
+                  但当前进程仍无法检测到它，重启应用后即可识别。
+                </p>
+                <p style={{
+                  fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)',
+                  marginBottom: 'var(--s4)', lineHeight: 1.6,
+                  padding: 'var(--s1)', borderRadius: 'var(--r2)',
+                  background: 'rgba(10,132,255,0.06)',
+                }}>
+                  安装程序把 <code>claude</code> 命令写入了用户 PATH，而本应用使用的是启动时
+                  继承的 PATH，无法自行更新。重启后「环境」页面即可正常显示 Claude Code。
+                </p>
+              </>
+            ) : (
+              <>
+                <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: 'var(--s2)', lineHeight: 1.6 }}>
+                  Node.js 和 Git 已成功安装。<br />
+                  需要重启应用以加载新的环境变量，然后继续安装 Claude Code。
+                </p>
+                <p style={{
+                  fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)',
+                  marginBottom: 'var(--s4)', lineHeight: 1.6,
+                  padding: 'var(--s1)', borderRadius: 'var(--r2)',
+                  background: 'rgba(10,132,255,0.06)',
+                }}>
+                  重启后回到「环境」页面再点一次安装即可：Node.js 与 Git 会被自动跳过，
+                  只完成 Claude Code。
+                </p>
+              </>
+            )}
             <div style={{ display: 'flex', gap: 'var(--s1)', justifyContent: 'center' }}>
               <button className="btn" onClick={() => setRestartPrompt(false)} style={{ fontSize: 'var(--text-sm)' }}>
                 稍后重启

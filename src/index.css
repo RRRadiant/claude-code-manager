@@ -151,7 +151,8 @@ button{font-family:var(--font-sans);cursor:pointer;border:none;background:none;f
 
 /* ===== Buttons ===== */
 .btn{
-  display:inline-flex;align-items:center;gap:var(--s1);padding:var(--s1) var(--s3);
+  display:inline-flex;align-items:center;justify-content:center;gap:var(--s1);
+  padding:var(--s1) var(--s3);
   border-radius:var(--r2);font-size:var(--text-md);font-weight:500;
   border:1px solid var(--border-secondary);background:var(--bg-secondary);
   color:var(--text-primary);transition:all var(--ease-out);white-space:nowrap;

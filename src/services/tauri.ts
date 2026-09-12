@@ -4,6 +4,7 @@ import type {
   ConfigFileInfo, ConfigContent, ConfigScope,
   DiagnosticReport, McpServerDef, McpTestResult,
   ModelInfo, ProviderConfigDraft, InstallStepResult,
+  DetectedClaudeConfig, ImportResult,
 } from '../types';
 
 /**
@@ -62,11 +63,17 @@ export async function saveProviderConfig(
   fastModel?: string, highCapabilityModel?: string,
   timeoutSecs?: number, customHeaders?: string,
   apiKey?: string
-): Promise<boolean> {
+): Promise<{ success: boolean; storage: 'plaintext_in_settings' | 'preserved_existing'; message: string }> {
   return invoke('save_provider_config', { providerType, name, baseUrl, defaultModel, fastModel, highCapabilityModel, timeoutSecs, customHeaders, apiKey });
 }
 export async function loadProviderConfig(provider_type: string): Promise<Partial<ProviderConfigDraft>> {
   return invoke('load_provider_config', { providerType: provider_type });
+}
+export async function detectExistingClaudeConfig(): Promise<DetectedClaudeConfig> {
+  return invoke<DetectedClaudeConfig>('detect_existing_claude_config');
+}
+export async function importExistingClaudeConfig(providerType: string): Promise<ImportResult> {
+  return invoke<ImportResult>('import_existing_claude_config', { providerType });
 }
 
 // ===== MCP =====

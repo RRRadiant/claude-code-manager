@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useEnvironmentStore } from '../stores/environmentStore'
 import { useConsoleStore } from '../stores/consoleStore'
+import type { DownloadState } from '../stores/consoleStore'
 import type { EnvironmentStatus, InstallStepResult } from '../types'
 import * as api from '../services/tauri'
 import { GlassCard } from '../components/glass'
@@ -10,6 +11,7 @@ export default function EnvironmentPage() {
   const loading = useEnvironmentStore((s) => s.loading)
   const detect = useEnvironmentStore((s) => s.detect)
   const activeTask = useConsoleStore((s) => s.activeTask)
+  const download = useConsoleStore((s) => s.download)
   const [plan, setPlan] = useState<InstallStepResult[] | null>(null)
   const [planLoading, setPlanLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -53,14 +55,14 @@ export default function EnvironmentPage() {
             overflow: 'hidden', marginBottom: 'var(--s1)',
           }}>
             <div style={{
-              width: `${Math.max(2, activeTask.progress)}%`,
+              width: `${Math.max(2, download ? download.percent : activeTask.progress)}%`,
               height: '100%', borderRadius: 2,
               background: 'var(--accent)',
               transition: 'width 0.3s ease',
             }} />
           </div>
           <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
-            {activeTask.step}
+            {download ? <DownloadLine d={download} /> : activeTask.step}
           </div>
         </GlassCard>
       )}
@@ -112,6 +114,33 @@ export default function EnvironmentPage() {
 }
 
 // ── System info ──
+
+/** Human-readable byte size, e.g. "12.3 MB". */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`
+}
+
+/** "正在下载 Node.js · 42% · 3.2 MB/s (11.0/34.9 MB)" */
+function DownloadLine({ d }: { d: DownloadState }) {
+  return (
+    <span>
+      正在下载 {d.component} · {d.percent.toFixed(0)}% · {formatBytes(d.speedBytesPerSec)}/s
+      {d.totalBytes > 0 && (
+        <span style={{ opacity: 0.7 }}>
+          {' '}({formatBytes(d.downloadedBytes)}/{formatBytes(d.totalBytes)})
+        </span>
+      )}
+    </span>
+  )
+}
 
 function SystemInfo({ status }: { status: EnvironmentStatus | null }) {
   if (!status) return <p className="text-tertiary" style={{ marginTop: 'var(--s4)' }}>点击"重新检测"开始</p>
