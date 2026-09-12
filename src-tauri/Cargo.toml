@@ -47,7 +47,7 @@ uuid = { version = "1", features = ["v4"] }
 # Windows-specific
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
-winreg = "0.52"
+winreg = "0.55"
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Environment"] }
 
 # HTTP client (for API testing, model detection)

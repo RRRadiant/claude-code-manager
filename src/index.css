@@ -1,7 +1,16 @@
 /* Claude Code Manager — Unified Design System */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/*
+ * Tailwind 4: the three `@tailwind` directives became a single import with
+ * layer sub-imports.
+ *
+ * `preflight` is deliberately omitted — the v3 config disabled it (`corePlugins
+ * .preflight = false`) to avoid clobbering the reset and design tokens below, and
+ * the equivalent here is simply not importing `base`. Only theme + utilities are
+ * pulled in, which is what the app actually consumes (a handful of layout
+ * utilities such as `.flex`, `.grid`, `.hidden`).
+ */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source("../src");
 
 /* ===== Design Tokens ===== */
 :root {

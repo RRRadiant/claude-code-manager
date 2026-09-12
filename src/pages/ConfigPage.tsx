@@ -10,16 +10,19 @@ export default function ConfigPage() {
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
 
-  useEffect(() => { loadFiles() }, [])
-
-  const loadFiles = async () => {
+  // Declared before the effect that calls it: referencing a `const` arrow
+  // function from an effect defined above it reads the binding before its
+  // initialiser runs, which the React Compiler lints as ambiguous.
+  const loadFiles = useCallback(async () => {
     try {
       setFiles(await listConfigFiles())
       setLoadError(null)
     } catch (e) {
       setLoadError(errorMessage(e))
     }
-  }
+  }, [])
+
+  useEffect(() => { loadFiles() }, [loadFiles])
 
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; msg: string } | null>(null)

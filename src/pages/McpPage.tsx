@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { McpServerDef, McpTestResult } from '../types'
 import { listMcpServers, testMcpServer, errorMessage } from '../services/tauri'
 import { GlassCard } from '../components/glass'
@@ -25,9 +25,10 @@ export default function McpPage() {
   const [editServer, setEditServer] = useState<McpServerDef | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
-  useEffect(() => { reload() }, [])
-
-  const reload = async () => {
+  // Declared before the effect that calls it: referencing a `const` arrow
+  // function from an effect defined above it reads the binding before its
+  // initialiser runs, which the React Compiler lints as ambiguous.
+  const reload = useCallback(async () => {
     setLoading(true)
     setTestResult(null)
     try {
@@ -37,7 +38,9 @@ export default function McpPage() {
       setLoadError(errorMessage(e))
     }
     finally { setLoading(false) }
-  }
+  }, [])
+
+  useEffect(() => { reload() }, [reload])
 
   const handleTest = async (name: string) => {
     setTesting(name)
@@ -183,6 +186,7 @@ export default function McpPage() {
 
       {/* Edit modal */}
       <McpEditModal
+        key={editServer?.name ?? 'none'}
         server={editServer}
         onClose={() => setEditServer(null)}
         onSaved={reload}

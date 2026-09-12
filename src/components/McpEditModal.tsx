@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import type { McpServerDef } from '../types'
 import { updateMcpServer, errorMessage } from '../services/tauri'
 import { GlassModal } from './glass'
@@ -15,28 +15,24 @@ interface EnvEntry {
 }
 
 export default function McpEditModal({ server, onClose, onSaved }: Props) {
-  const [name, setName] = useState('')
-  const [type_, setType_] = useState<'Stdio' | 'Http'>('Stdio')
-  const [command, setCommand] = useState('')
-  const [argsText, setArgsText] = useState('')
-  const [url, setUrl] = useState('')
-  const [envEntries, setEnvEntries] = useState<EnvEntry[]>([])
-  const [timeout, setTimeout_] = useState(60)
+  // Seed the form from `server` during render rather than from an effect.
+  //
+  // An effect that calls setState on mount renders twice and lints as
+  // `react(set-state-in-effect)`. The caller passes a `key`, so opening a
+  // different server remounts this component and these initialisers run again —
+  // which is exactly what the effect was emulating.
+  const [name, setName] = useState(server?.name ?? '')
+  const [type_, setType_] = useState<'Stdio' | 'Http'>(server?.type_ ?? 'Stdio')
+  const [command, setCommand] = useState(server?.command ?? '')
+  const [argsText, setArgsText] = useState((server?.args ?? []).join('\n'))
+  const [url, setUrl] = useState(server?.url ?? '')
+  // Preserve existing env vars when editing a server instead of resetting them.
+  const [envEntries, setEnvEntries] = useState<EnvEntry[]>(
+    (server?.env ?? []).map(e => ({ key: e.key, value: e.value })),
+  )
+  const [timeout, setTimeout_] = useState((server?.timeout_ms ?? 60000) / 1000)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (!server) return
-    setName(server.name)
-    setType_(server.type_)
-    setCommand(server.command ?? '')
-    setArgsText((server.args ?? []).join('\n'))
-    setUrl(server.url ?? '')
-    setTimeout_((server.timeout_ms ?? 60000) / 1000)
-    // Preserve existing env vars when editing a server instead of resetting them.
-    setEnvEntries((server.env ?? []).map(e => ({ key: e.key, value: e.value })))
-    setError('')
-  }, [server])
 
   const handleSave = async () => {
     if (!server?.source_file) { setError('未指定源文件路径'); return }

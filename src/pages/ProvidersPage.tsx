@@ -162,8 +162,20 @@ export default function ProvidersPage() {
 // ── Reusable form ──
 
 function ProviderForm({ providerType, title, fields }: { providerType: ProviderKey; title: string; fields: FieldDef[] }) {
-  // Dynamic form state
-  const [values, setValues] = useState<Record<string, string>>({})
+  /** Field defaults, derived from `fields` — the same shape the async load merges into. */
+  const blankValues = () => {
+    const init: Record<string, string> = {}
+    for (const f of fields) init[f.key] = f.defaultValue ?? ''
+    return init
+  }
+
+  // Dynamic form state.
+  //
+  // Seeded through the lazy initialiser rather than an effect: calling setState
+  // synchronously on mount renders twice and lints as
+  // `react(set-state-in-effect)`. The parent passes a `key`, so switching
+  // provider or reloading remounts this component with fresh defaults.
+  const [values, setValues] = useState<Record<string, string>>(blankValues)
   const [loading, setLoading] = useState<Record<string, boolean>>({})
   const [results, setResults] = useState<Record<string, { success: boolean; message: string } | null>>({})
   const [models, setModels] = useState<ModelInfo[] | null>(null)
@@ -171,19 +183,14 @@ function ProviderForm({ providerType, title, fields }: { providerType: ProviderK
   const [initDone, setInitDone] = useState(false)
   const [existingKeyMask, setExistingKeyMask] = useState<string | null>(null)
 
-  // Initialize from saved config
+  // Load saved config for this provider. Only the async part belongs in an
+  // effect; the defaults are already in `values`.
   useEffect(() => {
-    const init: Record<string, string> = {}
-    for (const f of fields) {
-      init[f.key] = f.defaultValue ?? ''
-    }
-    setValues(init)
-
     Promise.all([
       api.getProviderCredential(providerType).catch(() => ({ exists: false, masked: null, api_key: null })),
       api.loadProviderConfig(providerType).catch<Partial<ProviderConfigDraft>>(() => ({})),
     ]).then(([cred, cfg]) => {
-      const merged = { ...init }
+      const merged = blankValues()
       // SECURITY: do NOT load the real API key into the form.
       // Leave the field empty; if a key is already stored we surface a
       // masked hint via `existingKeyMask` so the user knows it is configured.
@@ -199,7 +206,10 @@ function ProviderForm({ providerType, title, fields }: { providerType: ProviderK
       setValues(merged)
       setInitDone(true)
     })
-  }, [providerType, fields])
+    // `fields` is stable per `providerType` (see FIELD_MAP); including it would
+    // only re-run the fetch on every render where the array identity changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerType])
 
   const setVal = (key: string, val: string) => setValues(prev => ({ ...prev, [key]: val }))
 

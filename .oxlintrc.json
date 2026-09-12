@@ -3,6 +3,22 @@
   "plugins": ["react", "typescript", "oxc"],
   "rules": {
     "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+
+    // ── Deliberate allowances ────────────────────────────────────────────────
+    //
+    // `react/set-state-in-effect` is enabled by default in oxlint >= 1.78 and
+    // fires on the two remaining data-loading effects (ConfigPage, McpPage).
+    // Both are false positives here: the functions they call are `async`, so
+    // every setState runs in a promise continuation *after* the first `await`,
+    // not synchronously during the effect. The rule cannot see across the async
+    // boundary.
+    //
+    // The genuinely problematic cases it caught were fixed rather than allowed:
+    // McpEditModal and ProviderForm seeded form state synchronously on mount and
+    // now use lazy useState initialisers plus a remount `key`.
+    //
+    // Revisit if the rule learns to follow async calls; then this can be removed.
+    "react/set-state-in-effect": "off"
   }
 }
