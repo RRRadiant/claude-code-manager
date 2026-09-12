@@ -20,21 +20,47 @@
 ```
 User Input (masked in UI)
   → IPC invoke to Rust backend
-    → keyring crate → Windows Credential Manager
-      → Config file stores: { "credentialId": "ccm/anthropic/default" }
+    → keyring crate → Windows Credential Manager   (CCM's own copy)
+    → Claude Code settings.json `env.ANTHROPIC_AUTH_TOKEN`  (the live token)
 ```
 
 ### Key Protection Rules
 | Storage Location | Allowed? | Notes |
 |-----------------|----------|-------|
 | Windows Credential Manager | ✅ Primary | Encrypted at rest by OS |
-| Config JSON (as `credentialId`) | ✅ Allowed | Only a reference, not the key |
-| Config JSON (as plaintext key) | ❌ Never | Even in local files |
+| `~/.claude/settings.json` (`env.ANTHROPIC_AUTH_TOKEN`) | ⚠️ **Plaintext, by necessity** | See below |
+| `settings.json.bak.*` | ⚠️ Plaintext | Timestamped backup written before every change; contains the same token |
+| CCM provider config (`%APPDATA%\ClaudeCodeManager\providers\*.json`) | ✅ Allowed | Stores settings only — **never** the key |
 | Frontend localStorage | ❌ Never | Plaintext in browser storage |
 | Log files | ❌ Never | Sanitized to `[REDACTED]` |
 | Error messages | ❌ Never | Replaced with `[key omitted]` |
 | Clipboard | ⚠️ Allowed | Only on explicit user action, with timeout |
 | Diagnostic reports | ❌ Never | Stripped before export |
+
+#### Why the key is written to `settings.json` in plaintext
+
+Claude Code reads `ANTHROPIC_AUTH_TOKEN` from its settings `env` block as a
+**literal value**. It has no concept of a credential reference.
+
+An earlier implementation wrote `"$CREDENTIALS:ccm/<provider>/default"` into that
+field instead of the real key. Claude Code sent that string verbatim as the
+bearer token, so **every request failed with 401** — the provider form reported
+success while Claude Code was left unusable.
+
+The current behaviour writes the resolved key and tells the user plainly:
+
+- The `save_provider_config` result carries `storage` and a `message` stating
+  that the key was written in plaintext and where.
+- The write goes through `write_config_inner`, which creates a `.bak.<timestamp>`
+  backup first and only then performs an atomic replace.
+- The value is re-read after the write and logged if it does not match
+  (`verify_key_written`).
+- If no key can be resolved, the **existing** value is preserved rather than
+  overwritten with something invalid.
+
+**Consequences to keep in mind:** the token is recoverable from disk by anyone
+who can read the user's profile, and each save leaves an additional `.bak` copy
+containing it. Treat `~/.claude/settings.json` and its backups as secrets.
 
 ### Credential Manager Operations
 - **Read**: Resolve credential ID → actual key (in memory only, drop after use)

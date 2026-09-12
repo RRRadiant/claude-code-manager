@@ -40,7 +40,10 @@ Rust 后端 (src-tauri/src/)
 - 前端不执行任何系统命令，所有副作用走 Tauri IPC
 - 命令是薄的：校验输入 → 委托服务 → 返回结果
 - 服务层纯 Rust、可测试
-- API Key 不落盘到 JSON / localStorage，仅存 Windows Credential Manager，配置里只存 `credentialId` 引用
+- API Key 存 Windows Credential Manager（CCM 自己的副本），同时**必须**以明文写入
+  `~/.claude/settings.json` 的 `env.ANTHROPIC_AUTH_TOKEN` —— Claude Code 只从该文件或
+  环境变量按字面值读取 token，不认凭据引用。CCM 的 provider 配置里不存 key，并会把
+  「已明文写入何处」明确回报给 UI。详见 `docs/security.md` 第 2 节。
 - 日志经 `LogSanitizer` 脱敏（脱敏器已实现，正在接线到所有日志路径）
 
 ## 关键决策

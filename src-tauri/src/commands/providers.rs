@@ -1,6 +1,6 @@
 use crate::credentials;
 use crate::error::{codes, AppError};
-use crate::impl_providers::{AnthropicProvider, CustomProvider, DeepSeekProvider};
+use crate::impl_providers::{mask_secret, AnthropicProvider, CustomProvider, DeepSeekProvider};
 use crate::providers::{ProviderAdapter, ProviderConfig};
 
 #[tauri::command]
@@ -105,26 +105,6 @@ pub async fn get_provider_credential(provider_type: String) -> Result<serde_json
     }
 }
 
-/// Mask a secret for display: keep a short prefix and the last 4 characters,
-/// redact the middle. Short secrets (< 12 chars) are fully redacted.
-fn mask_secret(secret: &str) -> String {
-    let len = secret.chars().count();
-    if len < 12 {
-        return "••••".to_string();
-    }
-    let chars: Vec<char> = secret.chars().collect();
-    let prefix: String = chars.iter().take(6).collect();
-    let suffix: String = chars
-        .iter()
-        .rev()
-        .take(4)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("{prefix}...{suffix}")
-}
-
 #[tauri::command]
 pub async fn delete_provider_credential(provider_type: String) -> Result<bool, AppError> {
     let cred_id = credentials::credential_id(&provider_type, "default");
@@ -144,7 +124,7 @@ pub async fn save_provider_config(
     timeout_secs: Option<u64>,
     custom_headers: Option<String>,
     api_key: Option<String>,
-) -> Result<bool, AppError> {
+) -> Result<serde_json::Value, AppError> {
     // 1. Save API key to credential manager if provided
     if let Some(ref key) = api_key {
         let cred_id = credentials::credential_id(&provider_type, "default");
@@ -196,10 +176,17 @@ pub async fn save_provider_config(
         _ => Box::new(CustomProvider::new()),
     };
 
-    let _ = adapter.apply_config(&provider_config).await;
+    // Propagate the failure: silently ignoring it left the credential saved but
+    // `settings.json` unwritten, so the UI reported success while Claude Code
+    // had no usable configuration.
+    let outcome = adapter.apply_config(&provider_config).await?;
 
     log::info!("Provider config saved and applied for {provider_type}");
-    Ok(true)
+    Ok(serde_json::json!({
+        "success": true,
+        "storage": outcome.storage,
+        "message": outcome.message,
+    }))
 }
 
 #[tauri::command]
@@ -212,4 +199,16 @@ pub async fn load_provider_config(provider_type: String) -> Result<serde_json::V
         Ok(None) => Ok(serde_json::json!({})),
         Err(_) => Ok(serde_json::json!({})),
     }
+}
+
+#[tauri::command]
+pub fn detect_existing_claude_config() -> crate::providers::DetectedClaudeConfig {
+    crate::impl_providers::detect_existing_claude_config()
+}
+
+#[tauri::command]
+pub fn import_existing_claude_config(
+    provider_type: String,
+) -> Result<crate::providers::ImportResult, AppError> {
+    crate::impl_providers::import_existing_claude_config(&provider_type)
 }

@@ -49,8 +49,14 @@ pub trait ProviderAdapter: Send + Sync {
     /// Detect available models from the provider
     async fn detect_models(&self, config: &ProviderConfig) -> AppResult<Vec<ModelInfo>>;
 
-    /// Apply this provider's configuration to Claude Code settings
-    async fn apply_config(&self, config: &ProviderConfig) -> AppResult<()>;
+    /// Apply this provider's configuration to Claude Code settings.
+    ///
+    /// Returns how the credential was stored, so the UI can be explicit about a
+    /// plaintext key landing in `settings.json`.
+    async fn apply_config(
+        &self,
+        config: &ProviderConfig,
+    ) -> AppResult<crate::impl_providers::ApplyConfigOutcome>;
 }
 
 /// Connection test result
@@ -60,4 +66,25 @@ pub struct ConnectionResult {
     pub message: String,
     pub response_time_ms: Option<u64>,
     pub error_code: Option<String>,
+}
+
+/// Detected existing Claude Code API configuration (from settings.json / env vars).
+/// Never carries the plaintext API key — only a masked preview.
+#[derive(Debug, Clone, Serialize)]
+pub struct DetectedClaudeConfig {
+    pub found: bool,
+    pub source: Option<String>,
+    pub provider_hint: Option<String>,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+    pub has_api_key: bool,
+    pub api_key_masked: Option<String>,
+}
+
+/// Result of importing an existing Claude Code configuration into CCM.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportResult {
+    pub success: bool,
+    pub message: String,
+    pub provider_type: String,
 }
