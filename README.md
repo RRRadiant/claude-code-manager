@@ -3,8 +3,8 @@
 > Windows 上给 Claude Code 用的图形化管理器 —— 不用敲命令行
 
 [![CI](https://github.com/RRRadiant/claude-code-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/RRRadiant/claude-code-manager/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![Arch](https://img.shields.io/badge/Arch-x64-lightgrey)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB)
 
