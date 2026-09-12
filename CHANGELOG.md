@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-12
+
 ### 新增
 - MCP 测试命令安全校验（拒绝 shell 元字符与路径穿越）。
 - 依赖自动更新扫描（Dependabot：npm + cargo，每周）。
@@ -168,6 +170,24 @@
 - 环境安装：Node.js 归档改为**校验通过后**才移入缓存，损坏文件不再污染缓存路径。
 - 环境安装：winget 的退出码与输出不再被静默丢弃，失败原因可诊断。
 - 环境安装：修正进度回退（60% → 50%）并补齐解压/校验阶段进度。
+- **依赖升级**：合并全部待处理的 Dependabot 更新。
+  - Rust：`winreg` 0.52→0.55（PATH 读写所用 API 未变，且 0.55 原本已由 `tauri-build`
+    引入，此举消除重复依赖）、`tokio` 1.53.0→1.53.1、`async-trait` 0.1.91→0.1.92、
+    `futures-util` 0.3.33→0.3.34。
+  - 前端：`typescript` 6→7（类型检查无需改动）、`react`/`react-dom` 19.2.7→19.3.0、
+    `@types/node` 24→26、`oxlint` 1.71→1.82。
+  - `tailwindcss` 3→4，需要迁移：PostCSS 插件改由 `@tailwindcss/postcss` 提供；
+    `@tailwind` 指令改为 `@import`；不再需要 `autoprefixer`（v4 自带前缀处理）；
+    `tailwind.config.js` 删除（v4 不再自动加载 JS 配置，其 `content` 已由 `@import`
+    的 `source()` 覆盖）。preflight 仍保持关闭（不导入 `base`），与 v3 配置一致。
+  - oxlint 1.82 启用更严格的 React 规则，暴露 4 处问题。其中 2 处为真实缺陷并已修复：
+    `McpEditModal` 与 `ProvidersPage` 在 effect 中同步 setState 初始化表单（会多一次
+    渲染），改为 `useState` 惰性初始化，并在调用处加 `key` 以保证切换时重挂载；
+    `ConfigPage` 与 `McpPage` 的加载函数在被 effect 调用时尚未完成初始化，已调整声明顺序。
+    另 2 处为规则的误报（函数是 `async`，setState 发生在 promise 回调而非同步路径），
+    已在 `.oxlintrc.json` 中关闭该规则并写明原因。
+  - 产物变化：JS 266 KB→296 KB（React 19.3）；CSS 10.2 KB→13.3 KB，
+    增量来自 Tailwind 4 注册的约 34 条 `@property`，gzip 后 2.89 KB→3.51 KB。
 
 ## [0.1.0] - 2026-07-20
 
