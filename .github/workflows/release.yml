@@ -237,11 +237,50 @@ jobs:
           }
           $sbom | ConvertTo-Json -Depth 10 | Out-File "release-assets/sbom.json" -Encoding UTF8
 
+      # Draft, so the notes can be reviewed before publishing. The body is built
+      # below from the CHANGELOG section that matches this tag — previously the
+      # whole CHANGELOG was dumped in, which turned the release page into a wall
+      # of text and overwrote any curated notes.
+      - name: Extract release notes for this tag
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $lines = Get-Content CHANGELOG.md
+
+          # Prefer an explicit "## [<version>]" section; otherwise fall back to
+          # "## [Unreleased]", which is where changes accumulate before a release.
+          $startIdx = ($lines | Select-String -Pattern "^## \[$([regex]::Escape($version))\]" | Select-Object -First 1).LineNumber
+          if (-not $startIdx) {
+            $startIdx = ($lines | Select-String -Pattern '^## \[Unreleased\]' | Select-Object -First 1).LineNumber
+          }
+          if (-not $startIdx) { throw "CHANGELOG.md has no section for $version and no [Unreleased] section" }
+
+          # Stop at the next top-level version heading.
+          $endIdx = $lines.Count
+          for ($i = $startIdx; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^## \[') { $endIdx = $i; break }
+          }
+
+          $notes = @(
+            "# Claude Code Manager ${{ github.ref_name }}"
+            ""
+            "Windows 上管理 Claude Code 的图形工具：一键装好环境、配置 API 服务商、管理 MCP Server。"
+            ""
+            "下载、系统要求与安装说明见 [README](https://github.com/${{ github.repository }}#快速开始)。"
+            ""
+            "---"
+            ""
+            ($lines[$startIdx..($endIdx - 1)] -join "`n")
+          ) -join "`n"
+
+          $notes | Out-File "release-notes.md" -Encoding UTF8
+          Write-Output "Release notes written ($($notes.Split("`n").Count) lines) for $version"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           name: Claude Code Manager ${{ github.ref_name }}
-          body_path: CHANGELOG.md
+          body_path: release-notes.md
           draft: true
           prerelease: false
           files: release-assets/*
