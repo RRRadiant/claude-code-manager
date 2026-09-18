@@ -32,7 +32,7 @@ log = "0.4"
 regex = "1"
 
 # Base64 for PowerShell `-EncodedCommand` (injection-safe script transport)
-base64 = "0.22"
+base64 = "0.23"
 
 # In-process zip extraction. Replaces PowerShell's `Expand-Archive`, which is
 # several times slower; this is also the fallback when `tar.exe` is unavailable.
