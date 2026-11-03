@@ -1,8 +1,9 @@
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import { accessSync, constants, statSync } from 'fs'
 import { delimiter, join } from 'path'
 
 import { mergedEnv } from '../installer/env'
+import { assertDebianPackageName } from './dependency-installer'
 
 export interface DepCheckResult {
   /** Overall status */
@@ -133,12 +134,27 @@ function isExecutableFile(candidate: string): boolean {
   }
 }
 
+/**
+ * argv for `dpkg-query`. The package name is a separate element, so it cannot
+ * change the command even if a caller forgets the name check.
+ */
+export function dpkgQueryArgs(pkg: string): string[] {
+  return ['-W', '-f=${Status}', assertDebianPackageName(pkg)]
+}
+
 function hasPkg(pkg: string): boolean {
+  let args: string[]
   try {
-    // dpkg-query -W returns "pkg\tversion" if installed, non-zero exit if not.
+    args = dpkgQueryArgs(pkg)
+  } catch {
+    return false
+  }
+  try {
+    // dpkg-query -W exits 0 when the package is known to dpkg, non-zero otherwise.
     // An absolute package-database lookup: PATH does not enter into it, which is
     // why these rows kept answering correctly while the command rows did not.
-    execSync(`dpkg-query -W -f='\${Status}' ${pkg} 2>/dev/null`, {
+    // execFile never goes through a shell, so `${Status}` stays a format string.
+    execFileSync('dpkg-query', args, {
       encoding: 'utf-8',
       timeout: 5000,
       stdio: ['ignore', 'pipe', 'ignore'],

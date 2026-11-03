@@ -23,6 +23,7 @@ import { join } from 'node:path'
 
 import {
   buildDependencyInstallPlan,
+  InvalidPackageNameError,
   renderInstallScript,
 } from '../src/main/services/dependency-installer.ts'
 import {
@@ -47,7 +48,7 @@ describe('buildDependencyInstallPlan', () => {
   test('installs every missing package in one apt call', () => {
     const plan = buildDependencyInstallPlan(['git', 'npm'])
     assert.deepEqual(plan.packages, ['git', 'npm'])
-    assert.equal(plan.command, 'sudo apt-get update && sudo apt-get install -y git npm')
+    assert.equal(plan.command, 'sudo apt-get update && sudo apt-get install -y -- git npm')
   })
 
   test('deduplicates and sorts, so the same set always reads the same', () => {
@@ -58,7 +59,7 @@ describe('buildDependencyInstallPlan', () => {
   test('ignores blank entries rather than passing them to apt', () => {
     const plan = buildDependencyInstallPlan(['git', '', '  '])
     assert.deepEqual(plan.packages, ['git'])
-    assert.equal(plan.command, 'sudo apt-get update && sudo apt-get install -y git')
+    assert.equal(plan.command, 'sudo apt-get update && sudo apt-get install -y -- git')
   })
 
   test('installs npm from the distribution, not from NodeSource', () => {
@@ -67,7 +68,7 @@ describe('buildDependencyInstallPlan', () => {
     // source to the user's machine, and is unnecessary: Kali's own npm is
     // current. Keep the command something the user can read and re-run.
     const plan = buildDependencyInstallPlan(['npm'])
-    assert.equal(plan.command, 'sudo apt-get update && sudo apt-get install -y npm')
+    assert.equal(plan.command, 'sudo apt-get update && sudo apt-get install -y -- npm')
     assert.ok(!plan.command?.includes('nodesource'), 'must not reach for NodeSource')
     assert.ok(!plan.command?.includes('|'), 'must not pipe anything into a shell')
   })
@@ -75,6 +76,29 @@ describe('buildDependencyInstallPlan', () => {
   test('needs sudo only where a password is genuinely required', () => {
     const command = buildDependencyInstallPlan(['git']).command ?? ''
     assert.equal(command.match(/sudo/g)?.length, 2, 'apt-get update and install')
+  })
+
+  test('exposes apt as an argv array, with packages after --', () => {
+    const plan = buildDependencyInstallPlan(['npm', 'git'])
+    assert.deepEqual(plan.updateArgv, ['sudo', 'apt-get', 'update'])
+    assert.deepEqual(plan.installArgv, ['sudo', 'apt-get', 'install', '-y', '--', 'git', 'npm'])
+    assert.equal(plan.updateArgv?.some((arg) => arg.includes(' ')), false)
+  })
+
+  test('rejects package names that could change the apt command', () => {
+    for (const name of ['git;rm -rf /', '$(reboot)', 'git && curl', '-y', '../git', 'Git', 'a b']) {
+      assert.throws(
+        () => buildDependencyInstallPlan([name]),
+        InvalidPackageNameError,
+        name,
+      )
+    }
+  })
+
+  test('an empty plan has no argv to spawn', () => {
+    const plan = buildDependencyInstallPlan([])
+    assert.equal(plan.updateArgv, null)
+    assert.equal(plan.installArgv, null)
   })
 })
 
@@ -103,6 +127,14 @@ describe('renderInstallScript', () => {
   test('points back at the app once it is done', () => {
     const script = renderInstallScript(buildDependencyInstallPlan(['git']))
     assert.ok(script.includes('重新检测'))
+  })
+
+  test('runs apt from a package array instead of eval-ing the command string', () => {
+    const plan = buildDependencyInstallPlan(['git', 'npm'])
+    const script = renderInstallScript(plan)
+    assert.match(script, /sudo apt-get install -y -- "\$\{packages\[@\]\}"/)
+    assert.equal(script.includes(`if ${plan.command}`), false)
+    assert.ok(script.includes("packages=(\n  'git'\n  'npm'\n)"))
   })
 
   test('is valid bash', { skip: noBash ? 'bash is not available on Windows' : false }, () => {
@@ -169,6 +201,14 @@ describe('writeTempScript', () => {
     () => {
       const content = renderInstallScript(buildDependencyInstallPlan(['git']))
       const file = writeTempScript('test-script', content)
+      // A stub `sudo` so the script can actually run without calling apt.
+      const stubDir = mkdtempSync(join(tmpdir(), 'ccm-sudo-stub-'))
+      const log = join(stubDir, 'sudo.log')
+      writeFileSync(
+        join(stubDir, 'sudo'),
+        `#!/bin/bash\nprintf '%s\\n' "$@" >> ${JSON.stringify(log)}\nexit 0\n`,
+      )
+      chmodSync(join(stubDir, 'sudo'), 0o755)
       try {
         const mode = statSync(file).mode & 0o777
         // 0700, not 0755: the script is executed by its owner and may run apt as
@@ -176,9 +216,18 @@ describe('writeTempScript', () => {
         assert.equal(mode, 0o700, 'owner-executable, nothing more')
         assert.equal(readFileSync(file, 'utf-8'), content)
         assert.equal(spawnSync('bash', ['-n', file]).status, 0)
-        assert.equal(spawnSync(file).status, 0, 'it must actually run')
+        const result = spawnSync(file, {
+          encoding: 'utf-8',
+          input: '',
+          env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ''}` },
+        })
+        assert.equal(result.status, 0, result.stderr)
+        const trace = readFileSync(log, 'utf-8')
+        assert.match(trace, /^apt-get\nupdate\n/m)
+        assert.match(trace, /apt-get\ninstall\n-y\n--\ngit\n/)
       } finally {
         rmSync(file, { force: true })
+        rmSync(stubDir, { recursive: true, force: true })
       }
     },
   )
