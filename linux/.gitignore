@@ -1,7 +1,8 @@
 node_modules/
 out/
 dist/
-!cli/ccm-tui/dist/
+# ccm release binaries are built by .github/workflows/release.yml.
+# Do not commit cli/ccm-tui/dist/.
 *.log
 .DS_Store
 Thumbs.db

@@ -217,8 +217,7 @@ PATH。应用内部不受影响。
 
 ```
 src/                      Electron 三进程源码（主进程 / preload / React 渲染层）
-cli/ccm-tui/              Rust TUI 源码
-  └── dist/               三个预编译二进制（Linux x64/arm64、macOS arm64）
+cli/ccm-tui/              Rust TUI 源码（二进制由 Release 工作流构建，不进 git）
 resources/                图标与桌面入口
 docs/                     架构与设计文档
 scripts/                  构建与验证脚本
@@ -286,25 +285,29 @@ npm run package:appimage
 
 ## 情况 C：对方只想在**终端**里用
 
-`cli/ccm-tui/dist/` 里已经有预编译的 TUI 单文件二进制：
+预编译的 TUI 不在 git 里。打 `v*` 标签时，Release 工作流会构建并上传：
 
 ```
-ccm-linux-x64       983 KB     ELF x86-64
-ccm-linux-arm64     880 KB     ELF aarch64
-ccm-macos-arm64     896 KB     Mach-O arm64
+ccm-linux-x64
+ccm-linux-arm64
+ccm-macos-arm64
+ccm-SHA256SUMS.txt          # 上面三个文件的 SHA256
 ```
 
-发对应的那个即可，**不需要 Node.js**（只有一个要求：glibc，非静态链接）。
+从 [Releases](https://github.com/RRRadiant/claude-code-manager/releases) 下载对应的文件，
+**不需要 Node.js**（动态链接 glibc，不是静态二进制）。先核对校验值再运行：
 
 ```bash
+sha256sum -c ccm-SHA256SUMS.txt --ignore-missing
 chmod +x ccm-linux-x64
 ./ccm-linux-x64
 ```
 
-按键：`1`–`8` 跳标签页，`Tab` 切换，`↑↓`/`j k` 移动，`n` 新建，`d` 删除，`q` 按两次退出。
+也可以自己构建：`cd cli/ccm-tui && cargo build --release`，产物是 `target/release/ccm`。
+`bash install.sh` 会优先用这份构建产物；若把 Release 里的 `ccm-<系统>-<架构>` 放进
+`cli/ccm-tui/dist/`，脚本也会安装它。
 
-> 注意：这是仓库里原有的二进制，构建于修复之前，已知存在若干问题（详见
-> `docs/kali-verification.md`）。要发布建议先从 `cli/ccm-tui` 重新构建。
+按键：`1`–`8` 跳标签页，`Tab` 切换，`↑↓`/`j k` 移动，`n` 新建，`d` 删除，`q` 按两次退出。
 
 ---
 
@@ -314,7 +317,7 @@ chmod +x ccm-linux-x64
 |---|---|---|
 | 普通用户 | 只发 `.AppImage` | 157 MB |
 | 开发者 | 只发源码包 | 280 KB |
-| 终端用户 | 只发 `ccm-linux-x64` | 983 KB |
+| 终端用户 | 只发 Releases 里的 `ccm-linux-x64` 和校验文件 | 约 1 MB |
 
 **不要把整个项目目录直接打包发出去** —— 里面有 `node_modules`（体积大且平台相关）
 和已经过期的 `out/`，对方拿到反而困惑。
