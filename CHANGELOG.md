@@ -7,6 +7,12 @@
 
 ## [Unreleased]
 
+### 安全
+- MCP 测试与保存改为参数数组策略：解释器拒绝 `-e` / `-c` / `eval`，并要求脚本或包名；`docker` 只允许 `run <镜像>`，容器命令不能再是 shell 或 `-e`/`-c`；`cargo` 只允许 `run`；`git` 拒绝 `-c` 和 `config`。
+- Linux 系统依赖安装与 `dpkg-query` 改为 `execFile` 参数数组，包名按 Debian 规则校验。
+- 依赖：升级可修复的 npm 漏洞（含 DOMPurify、fast-uri、tar、Electron、Vite、`@creativoma/liquid-glass`）。`npm audit --audit-level=high` 通过。`zip` 升到 9.x（解压时跳过符号链接，并去掉 setuid/setgid），`base64` 升到 0.23，同时更新 rustls / quinn-proto / async-trait。
+- `ccm` 预编译二进制移出 git，改由 Release 工作流构建并附带 SHA256。
+
 ### 新增
 - Linux 版（Kali / Debian）：Electron GUI + Rust TUI 源码并入 `linux/`，
   发布 `claude-code-manager_1.3.7_amd64.deb`；新增 Linux CI（`.github/workflows/linux.yml`）。

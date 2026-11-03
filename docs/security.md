@@ -97,7 +97,7 @@ Every IPC command validates:
 - Types (Rust's type system at serde boundary)
 - String lengths (max lengths enforced)
 - Path safety (path normalization, no `..` traversal)
-- Command/args (no shell metacharacters in MCP commands)
+- Command/args: MCP launches are a structured argv (`Vec<String>`), never a shell string. The executable must be an allowlisted bare name. `node` / `python` / `bun` / `deno` / `npx` reject `-e`, `-c`, and `eval` and require a script or package; `docker` is limited to `docker run <image>` and the container command cannot be a shell or an `-e`/`-c` eval form; `cargo` is limited to `cargo run`; `git` rejects `-c` and the `config` subcommand.
 
 ---
 
