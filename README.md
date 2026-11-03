@@ -41,7 +41,7 @@
 
 | 组件 | 当前版本 | 记在哪 |
 |---|---|---|
-| Windows 桌面版（Tauri） | 2.0.0 | 根目录 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` |
+| Windows 桌面版（Tauri） | 2.0.1 | 根目录 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` |
 | Linux 桌面版（Electron） | 1.3.7 | `linux/package.json`。`.deb` / AppImage 的文件名跟随它 |
 | 终端 TUI `ccm` | crate 1.0.0 | `linux/cli/ccm-tui/Cargo.toml`。Release 资产叫 `ccm-linux-x64` 这类名字，不带版本号 |
 
