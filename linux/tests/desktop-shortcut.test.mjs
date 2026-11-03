@@ -157,13 +157,21 @@ describe('desktopDirs', { skip: homeSkip }, () => {
 
     const previous = process.env.HOME
     const previousXdg = process.env.XDG_DESKTOP_DIR
+    const previousConfigHome = process.env.XDG_CONFIG_HOME
     process.env.HOME = fake
     delete process.env.XDG_DESKTOP_DIR
+    // Point XDG_CONFIG_HOME at the fake home too. Hosted runners (and some
+    // desktops) export a real one; leaving it set makes `xdg-user-dir` read the
+    // host's user-dirs.dirs and answer with a host directory, which is how this
+    // test failed on CI while passing locally.
+    process.env.XDG_CONFIG_HOME = join(fake, '.config')
     try {
       return await fn(fake)
     } finally {
       process.env.HOME = previous
       if (previousXdg !== undefined) process.env.XDG_DESKTOP_DIR = previousXdg
+      if (previousConfigHome !== undefined) process.env.XDG_CONFIG_HOME = previousConfigHome
+      else delete process.env.XDG_CONFIG_HOME
       rmSync(fake, { recursive: true, force: true })
     }
   }

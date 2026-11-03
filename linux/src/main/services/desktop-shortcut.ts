@@ -105,6 +105,20 @@ function looksUsable(dir: string): boolean {
   }
 }
 
+/**
+ * Where `user-dirs.dirs` lives.
+ *
+ * XDG puts it under `$XDG_CONFIG_HOME`, which defaults to `~/.config`. Reading
+ * `~/.config` unconditionally made the app disagree with `xdg-user-dir` in any
+ * session that overrides the variable — the app then preferred a directory the
+ * session does not show. Relative values are ignored, as the spec requires.
+ */
+function userDirsFile(): string {
+  const configured = process.env.XDG_CONFIG_HOME?.trim()
+  const configHome = configured?.startsWith('/') ? configured : join(homedir(), '.config')
+  return join(configHome, 'user-dirs.dirs')
+}
+
 /** Read `XDG_DESKTOP_DIR` out of a `user-dirs.dirs`, expanding `$HOME`. */
 export function parseUserDirsDesktop(file: string, home: string): string | null {
   try {
@@ -143,7 +157,7 @@ export async function desktopDirs(): Promise<string[]> {
   if (await which('xdg-user-dir')) {
     configured.push(await runForOutput('xdg-user-dir', ['DESKTOP']))
   }
-  configured.push(parseUserDirsDesktop(join(homedir(), '.config', 'user-dirs.dirs'), homedir()))
+  configured.push(parseUserDirsDesktop(userDirsFile(), homedir()))
   configured.push(process.env.XDG_DESKTOP_DIR ?? null)
 
   const existingStandard = ['Desktop', '桌面']
@@ -176,7 +190,7 @@ export async function desktopDir(): Promise<string | null> {
   if (await which('xdg-user-dir')) {
     configured.push(await runForOutput('xdg-user-dir', ['DESKTOP']))
   }
-  configured.push(parseUserDirsDesktop(join(homedir(), '.config', 'user-dirs.dirs'), homedir()))
+  configured.push(parseUserDirsDesktop(userDirsFile(), homedir()))
   configured.push(process.env.XDG_DESKTOP_DIR ?? null)
 
   const existingStandard = ['Desktop', '桌面']

@@ -12,6 +12,11 @@
   发布 `claude-code-manager_1.3.7_amd64.deb`；新增 Linux CI（`.github/workflows/linux.yml`）。
 - 根 README 改为双平台说明，新增 Linux 安装、构建与已知问题。
 
+### 修复
+- Linux 版桌面图标：`user-dirs.dirs` 改为按 `$XDG_CONFIG_HOME`（默认 `~/.config`）读取，
+  修复自定义 XDG 目录的会话中与 `xdg-user-dir` 答案不一致的问题；单元测试同时隔离
+  `XDG_CONFIG_HOME`，不再依赖宿主机环境。
+
 ## [2.0.0] - 2026-09-12
 
 ### 新增
