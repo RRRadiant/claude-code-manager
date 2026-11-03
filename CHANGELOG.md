@@ -7,21 +7,28 @@
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-11-03
+
 ### 安全
-- MCP 测试与保存改为参数数组，并且每个运行器只有允许的形状：脚本或包名，而不是“先放行再拦几个危险旗标”。因此 `uv run -- cmd`、`git --upload-pack=<cmd>`、`docker run … env -S "sh -c …"`、`python -m timeit <代码>` 会被拒绝；`python3.12` / `Python.EXE` 这类解释器名，以及 `uv run --python <路径>`，同样拒绝。合法的 `npx -p <包> <命令>` 仍然可以。`git` 只留只读子命令。
-- Linux 系统依赖安装与 `dpkg-query` 改为 `execFile` 参数数组，包名按 Debian 规则校验。
-- 依赖：升级可修复的 npm 漏洞（含 DOMPurify、fast-uri、tar、Electron、Vite、`@creativoma/liquid-glass`）。`npm audit --audit-level=high` 通过。`zip` 升到 9.x（解压时跳过符号链接，并去掉 setuid/setgid），`base64` 升到 0.23，同时更新 rustls / quinn-proto / async-trait。
-- `ccm` 预编译二进制移出 git，改由 Release 工作流构建并附带 SHA256。
+- MCP 测试与保存改为参数数组，并且每个运行器只有允许的形状：脚本或包名，而不是“先放行再拦几个危险旗标”。因此 `uv run -- cmd`、`git --upload-pack=<cmd>`、`docker run … env -S "sh -c …"`、`python -m timeit <代码>` 会被拒绝；`python3.12` / `Python.EXE` 这类解释器名，以及 `uv run --python <路径>`，同样拒绝。合法的 `npx -p <包> <命令>` 仍然可以。`git` 只留只读子命令。（#21）
+- Linux 系统依赖安装与 `dpkg-query` 改为 `execFile` 参数数组，包名按 Debian 规则校验。（#21）
+- 依赖：升级可修复的 npm 漏洞（含 DOMPurify、fast-uri、tar、Electron、Vite、`@creativoma/liquid-glass`）。`npm audit --audit-level=high` 通过。`zip` 升到 9.x（解压时跳过符号链接，并去掉 setuid/setgid），`base64` 升到 0.23，同时更新 rustls / quinn-proto / async-trait。（#21）
+- `ccm` 预编译二进制移出 git，改由 Release 工作流构建 `ccm-linux-x64`、`ccm-linux-arm64`、
+  `ccm-macos-arm64` 并附带 SHA256。`install.sh` 对放进 `dist/` 的文件先 `chmod +x` 再检测是否可执行。（#21）
 
 ### 新增
 - Linux 版（Kali / Debian）：Electron GUI + Rust TUI 源码并入 `linux/`，
   发布 `claude-code-manager_1.3.7_amd64.deb`；新增 Linux CI（`.github/workflows/linux.yml`）。
 - 根 README 改为双平台说明，新增 Linux 安装、构建与已知问题。
+- 根 README 补充版本号说明（Windows 桌面、Linux 桌面、`ccm` 各自编号）、安全设计，以及构建与验证命令。（#21）
 
 ### 修复
 - Linux 版桌面图标：`user-dirs.dirs` 改为按 `$XDG_CONFIG_HOME`（默认 `~/.config`）读取，
   修复自定义 XDG 目录的会话中与 `xdg-user-dir` 答案不一致的问题；单元测试同时隔离
   `XDG_CONFIG_HOME`，不再依赖宿主机环境。
+- README 的 License 与 Platform 徽章在 GitHub 上显示为裂图。更换 shields.io URL
+  （去掉 `.svg` 后缀与 `%2F` 转义，与同组能正常显示的 Arch / Tauri 徽章一致）。
+- `linux/README.md` 中的单元测试数量由「约 80 项」改为「约 140 项，Linux 上全量运行」。
 
 ## [2.0.0] - 2026-09-12
 
