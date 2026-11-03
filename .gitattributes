@@ -1,0 +1,10 @@
+# Linux 子项目的脚本必须保持 LF —— 在 Windows 上检出时也不做 CRLF 转换，
+# 否则在 Kali / Debian 上会出现 "bad interpreter: /bin/bash^M" 之类的错误。
+
+linux/**/*.sh                       text eol=lf
+linux/cli/ccm                       text eol=lf
+linux/resources/linux/AppRun        text eol=lf
+linux/resources/linux/postinst      text eol=lf
+linux/resources/linux/postrm        text eol=lf
+linux/resources/linux/*.desktop     text eol=lf
+linux/resources/linux/*.txt         text eol=lf

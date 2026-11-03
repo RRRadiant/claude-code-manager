@@ -1,0 +1,174 @@
+#!/bin/bash
+#
+# postinst for claude-code-manager.
+#
+# Puts a launcher on the installer's desktop. The .deb already installs a menu
+# entry into /usr/share/applications, but a desktop icon is what people look for
+# after installing something, and leaving them to hunt through the menu is the
+# difference between "it worked" and "where did it go".
+#
+# Who gets the icon is the hard part. The obvious source is SUDO_USER, which sudo
+# sets for `sudo apt install ./x.deb` — the path the install guide documents. But
+# it is absent whenever apt runs without sudo in the middle: a GUI front-end, a
+# root shell, `su -`, a provisioning script, or `dpkg -i` from a root login. In
+# those cases the old version of this script silently did nothing, which is
+# indistinguishable from a broken package. So the search widens: the users who
+# are actually logged in, and failing that every human account.
+#
+# Deliberately does not fail the install if anything here goes wrong: a missing
+# desktop icon is a cosmetic problem, and aborting the package configuration over
+# it would leave the user with a half-configured install that is harder to fix
+# than no icon at all. Every step is best-effort and the script always exits 0.
+
+set -u
+
+ACTION="${1:-configure}"
+
+# Only act on configure; apt also calls this with "abort-upgrade" and friends.
+[ "$ACTION" = "configure" ] || exit 0
+
+LOG=/var/log/claude-code-manager-postinst.log
+log() {
+    printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG" 2>/dev/null || true
+}
+
+# Make sure /usr/bin/claude-code-manager exists.
+#
+# electron-builder registers this through update-alternatives, but alternatives
+# only creates the symlink the first time a name is registered. A remove followed
+# by a reinstall of the same version drops the link and does not restore it,
+# which leaves the application launchable from the menu but not from the command
+# line -- silently breaking the `claude-code-manager` command the install guide
+# tells people to use. Registering it here as well makes the outcome independent
+# of the alternatives database's history.
+BIN="/opt/Claude Code Manager/claude-code-manager"
+if [ -x "$BIN" ]; then
+    if command -v update-alternatives >/dev/null 2>&1; then
+        update-alternatives --install /usr/bin/claude-code-manager \
+            claude-code-manager "$BIN" 100 >/dev/null 2>&1 || true
+    fi
+    # Fall back to a plain symlink if alternatives is unavailable or failed.
+    if [ ! -e /usr/bin/claude-code-manager ]; then
+        ln -sf "$BIN" /usr/bin/claude-code-manager 2>/dev/null || true
+    fi
+fi
+
+# Everything below concerns the desktop icon and is entirely optional, so the
+# script keeps going regardless of what fails.
+
+SOURCE="/usr/share/applications/claude-code-manager.desktop"
+[ -r "$SOURCE" ] || { log "no $SOURCE; skipping desktop icon"; exit 0; }
+
+# Every desktop directory this user has, configured one first.
+#
+# More than one is normal and writing to all of them is deliberate: a session
+# reads user-dirs.dirs once at login, so after a locale change the configured
+# directory and the one actually on screen are different, and nothing here can
+# tell which. A launcher written only to the configured directory is then
+# invisible — the file exists, the install reports success, and the user sees an
+# empty desktop. One extra small file in a folder the session may not be showing
+# removes the guess; postrm clears all of them again.
+#
+# Nothing is invented: with no configured path and no standard directory this
+# prints nothing and says so in the log.
+desktop_dirs_for() {
+    local home="$1" raw candidate d
+    local -a dirs=()
+
+    if [ -r "$home/.config/user-dirs.dirs" ]; then
+        raw="$(sed -n 's/^[[:space:]]*XDG_DESKTOP_DIR[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' \
+            "$home/.config/user-dirs.dirs" 2>/dev/null | head -1)"
+
+        # user-dirs.dirs writes `"$HOME/桌面"`; a hand-edited file sometimes says
+        # `"~/桌面"` or the braced form of the same variable. The braced form is
+        # matched through a character class rather than written out: electron-builder
+        # runs maintainer scripts through a dollar-brace macro templater and fails
+        # the build on anything shaped like a macro it does not know, HOME included.
+        raw="$(printf '%s' "$raw" | sed -e 's|^\$[{]HOME[}]|'"$home"'|' \
+                                          -e 's|^\$HOME|'"$home"'|' \
+                                          -e 's|^~|'"$home"'|')"
+
+        [ -n "$raw" ] && [ -d "$raw" ] && dirs+=("$raw")
+    fi
+
+    for candidate in "$home/Desktop" "$home/桌面"; do
+        [ -d "$candidate" ] || continue
+        for d in "${dirs[@]}"; do
+            [ "$d" = "$candidate" ] && continue 2
+        done
+        dirs+=("$candidate")
+    done
+
+    if [ "${#dirs[@]}" -eq 0 ]; then
+        log "no desktop directory for $home (looked at user-dirs.dirs, $home/Desktop, $home/桌面)"
+        return 1
+    fi
+
+    printf '%s\n' "${dirs[@]}"
+}
+
+# Users worth considering, best first.
+candidate_users() {
+    local u
+    # DEBUSER is not a standard apt variable, but honouring it costs nothing and
+    # some front-ends do set it.
+    for u in "${DEBUSER:-}" "${SUDO_USER:-}"; do
+        [ -n "$u" ] && [ "$u" != "root" ] && printf '%s\n' "$u"
+    done
+    # Anyone with a session right now is certainly a real user of this machine.
+    if command -v loginctl >/dev/null 2>&1; then
+        loginctl list-users --no-legend 2>/dev/null | awk '{print $2}'
+    fi
+    # Last resort: every human account. Only reached when nothing above matched,
+    # so a shared machine does not collect icons nobody asked for.
+    awk -F: '$3 >= 1000 && $3 < 60000 && $6 ~ /^\// {print $1}' /etc/passwd
+}
+
+# The preferred user, when we know one: act only for them.
+PREFERRED="${DEBUSER:-${SUDO_USER:-}}"
+[ "$PREFERRED" = "root" ] && PREFERRED=""
+
+if [ -n "$PREFERRED" ]; then
+    USERS="$PREFERRED"
+else
+    USERS="$(candidate_users | awk '!seen[$0]++')"
+    log "no SUDO_USER/DEBUSER; falling back to: $(printf '%s' "$USERS" | tr '\n' ' ')"
+fi
+
+created=0
+for TARGET_USER in $USERS; do
+    [ "$TARGET_USER" = "root" ] && continue
+    TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
+    [ -n "$TARGET_HOME" ] && [ -d "$TARGET_HOME" ] || continue
+
+    # One line per directory: `desktop_dirs_for` prints every candidate and says
+    # nothing at all when there is none.
+    while IFS= read -r DESKTOP; do
+        [ -n "$DESKTOP" ] || continue
+
+        ICON="$DESKTOP/claude-code-manager.desktop"
+        cp -f "$SOURCE" "$ICON" 2>/dev/null || continue
+        chown "$TARGET_USER":"$(id -gn "$TARGET_USER" 2>/dev/null || echo "$TARGET_USER")" \
+            "$ICON" 2>/dev/null || true
+        chmod 0755 "$ICON" 2>/dev/null || true
+        created=$((created + 1))
+
+        # GNOME and a few other file managers refuse to launch a .desktop file
+        # that has not been marked trusted, and the failure is silent: the icon is
+        # there but double-clicking does nothing. Only that user can set the flag,
+        # because GVFS stores it per-user, so mark it now while we know who they are.
+        if [ -S "/run/user/$(id -u "$TARGET_USER" 2>/dev/null)/bus" ]; then
+            su - "$TARGET_USER" -c \
+                "gio set '$ICON' metadata::trusted true 2>/dev/null" >/dev/null 2>&1 || true
+        fi
+
+        log "created $ICON for $TARGET_USER"
+        echo "claude-code-manager: 桌面图标已创建：$ICON"
+    done < <(desktop_dirs_for "$TARGET_HOME")
+done
+
+if [ "$created" -eq 0 ]; then
+    log "no desktop directory found for any candidate user; no icon created"
+fi
+
+exit 0

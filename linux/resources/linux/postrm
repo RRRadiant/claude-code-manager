@@ -1,0 +1,89 @@
+#!/bin/bash
+#
+# postrm for claude-code-manager.
+#
+# Removes the desktop shortcut that postinst created.
+#
+# The shortcut cannot be a package file: it lives in the per-user desktop
+# directory, whose path depends on the user and their locale, and the package is
+# not installed per-user. Because dpkg does not know the file exists, `apt
+# remove` leaves it behind — and a launcher pointing at a deleted binary is worse
+# than no launcher, since double-clicking it fails with no explanation.
+#
+# electron-builder generates its own postrm to clean up the update-alternatives
+# entry. Ours replaces it and does that too.
+#
+# Every step is best-effort: uninstalling must succeed even if a file cannot be
+# removed.
+
+set -u
+
+ACTION="${1:-remove}"
+
+# Runs after postinst on an upgrade; the new postinst recreates the shortcut, so
+# there is nothing to do and removing it here would just churn.
+case "$ACTION" in
+    remove|purge|disappear) ;;
+    *) exit 0 ;;
+esac
+
+# ── update-alternatives ───────────────────────────────────────────────────────
+# Inlined rather than delegating to the generated script, because we are
+# replacing it. Safe to run when the entry was never registered.
+BIN="/opt/Claude Code Manager/claude-code-manager"
+if command -v update-alternatives >/dev/null 2>&1; then
+    update-alternatives --remove claude-code-manager "$BIN" >/dev/null 2>&1 || true
+fi
+# A plain symlink fallback may have been used by postinst; alternatives leaves it.
+if [ -L /usr/bin/claude-code-manager ] && [ ! -e /usr/bin/claude-code-manager ]; then
+    rm -f /usr/bin/claude-code-manager 2>/dev/null || true
+fi
+
+# ── desktop shortcut ──────────────────────────────────────────────────────────
+# Searched rather than derived: postrm may run without DEBUSER (a purge after a
+# manual dpkg -i, or a delayed autoremove), and the directory name is localised.
+# The filename is distinctive enough that a match is unambiguous.
+remove_shortcut() {
+    dir="$1"
+    file="$dir/claude-code-manager.desktop"
+    [ -f "$file" ] || return 0
+
+    # Only remove the launcher this package wrote. If someone edited it to point
+    # somewhere else, it is no longer ours to delete.
+    if grep -q 'claude-code-manager' "$file" 2>/dev/null; then
+        rm -f "$file" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+removed=0
+
+# The installing user first, when known.
+TARGET_USER="${DEBUSER:-${SUDO_USER:-}}"
+if [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ]; then
+    TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
+    if [ -n "$TARGET_HOME" ]; then
+        for d in "$TARGET_HOME/Desktop" "$TARGET_HOME/桌面"; do
+            remove_shortcut "$d" && removed=1
+        done
+    fi
+fi
+
+# Then every other user's desktop, so a purge after the fact still cleans up.
+for d in /root/Desktop /root/桌面 /home/*/Desktop /home/*/桌面; do
+    [ -d "$d" ] || continue
+    remove_shortcut "$d" && removed=1
+done
+
+# Remove now-empty desktop directories only if we created them. postinst does not
+# create them (it exits if none exists), so there is nothing to undo here.
+
+# ── icons cache ───────────────────────────────────────────────────────────────
+# Stale icon-theme caches keep a deleted application listed in some menus.
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    for theme in /usr/share/icons/hicolor; do
+        [ -d "$theme" ] && gtk-update-icon-cache -q -t -f "$theme" >/dev/null 2>&1 || true
+    done
+fi
+
+exit 0

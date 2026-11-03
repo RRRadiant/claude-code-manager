@@ -1,0 +1,8 @@
+#!/bin/bash
+# Claude Code Manager CLI — 优先 Rust TUI，回退 gum
+CLI_BIN="$HOME/.local/bin/ccm"
+if [ -x "$CLI_BIN" ] && file "$CLI_BIN" 2>/dev/null | grep -qE "ELF|Mach-O"; then
+    exec "$CLI_BIN" "$@"
+fi
+echo "CLI 未安装。运行 ClaudeCodeManager.sh（AppImage）或安装 .deb 后从应用菜单启动，或: cd cli/ccm-tui && bash install.sh"
+exit 1

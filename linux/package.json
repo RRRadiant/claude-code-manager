@@ -1,0 +1,133 @@
+{
+  "name": "claude-code-manager",
+  "version": "1.3.7",
+  "description": "Claude Code one-click installer and visual configuration manager",
+  "main": "./out/main/index.js",
+  "author": "",
+  "license": "MIT",
+  "homepage": "https://github.com/RRRadiant/claude-code-manager",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RRRadiant/claude-code-manager.git",
+    "directory": "linux"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-tests.mjs",
+    "check:css": "node scripts/check-css.mjs",
+    "check:package": "node scripts/check-package.mjs",
+    "bundle:headless": "node scripts/bundle-headless.mjs",
+    "package:deb": "electron-vite build && node scripts/check-css.mjs && electron-builder --linux deb",
+    "package:appimage": "electron-vite build && node scripts/check-css.mjs && electron-builder --linux appImage",
+    "package:linux": "electron-vite build && node scripts/check-css.mjs && electron-builder --linux",
+    "package:all": "electron-vite build && node scripts/check-css.mjs && electron-builder --linux --mac --win"
+  },
+  "keywords": [
+    "claude-code",
+    "manager",
+    "electron",
+    "config"
+  ],
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.16",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^42.3.3",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.5"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "@tailwindcss/vite": "^4.3.0",
+    "chokidar": "^4.0.3",
+    "electron-store": "^11.0.2",
+    "gray-matter": "^4.0.3",
+    "monaco-editor": "^0.55.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.0",
+    "zustand": "^5.0.14"
+  },
+  "build": {
+    "appId": "com.claude-code.manager",
+    "productName": "Claude Code Manager",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*",
+      "resources/**/*"
+    ],
+    "appImage": {},
+    "linux": {
+      "target": [
+        {
+          "target": "deb",
+          "arch": ["x64","arm64"]
+        },
+        {
+          "target": "appImage",
+          "arch": ["x64","arm64"]
+        }
+      ],
+      "executableName": "claude-code-manager",
+      "icon": "resources/linux/512x512.png",
+      "category": "Development",
+      "maintainer": "Claude Code Manager <noreply@example.com>",
+      "vendor": "Claude Code Manager",
+      "synopsis": "Claude Code Manager",
+      "description": "One-click Claude Code CLI installer and visual configuration manager",
+      "extraResources": [
+        {
+          "from": "resources/linux",
+          "to": "linux-resources"
+        }
+      ]
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64","arm64"]
+        }
+      ],
+      "icon": "resources/icon.icns",
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.ico"
+    },
+    "deb": {
+      "depends": [
+        "libsecret-1-0",
+        "gnome-keyring"
+      ],
+      "recommends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libasound2",
+        "libgbm1",
+        "xdg-utils"
+      ],
+      "afterInstall": "resources/linux/postinst",
+      "afterRemove": "resources/linux/postrm"
+    }
+  }
+}

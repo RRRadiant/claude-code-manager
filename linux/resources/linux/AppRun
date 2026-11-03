@@ -1,0 +1,14 @@
+#!/bin/bash
+# AppImage entry point — resolves the binary directory and launches
+# Works with --appimage-extract and FUSE mount modes
+
+# $APPDIR is set by AppImage runtime (FUSE mode)
+# In extract mode, detect from script location
+if [ -z "$APPDIR" ]; then
+  APPDIR="$(cd "$(dirname "$0")" && pwd)"
+fi
+
+export PATH="${APPDIR}/usr/bin:${PATH}"
+export LD_LIBRARY_PATH="${APPDIR}/usr/lib:${LD_LIBRARY_PATH}"
+
+exec "${APPDIR}/claude-code-manager" "$@"

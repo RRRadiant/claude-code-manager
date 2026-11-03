@@ -7,6 +7,11 @@
 
 ## [Unreleased]
 
+### 新增
+- Linux 版（Kali / Debian）：Electron GUI + Rust TUI 源码并入 `linux/`，
+  发布 `claude-code-manager_1.3.7_amd64.deb`；新增 Linux CI（`.github/workflows/linux.yml`）。
+- 根 README 改为双平台说明，新增 Linux 安装、构建与已知问题。
+
 ## [2.0.0] - 2026-09-12
 
 ### 新增
