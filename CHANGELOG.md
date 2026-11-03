@@ -8,7 +8,7 @@
 ## [Unreleased]
 
 ### 安全
-- MCP 测试与保存改为参数数组策略：解释器拒绝 `-e` / `-c` / `eval`，并要求脚本或包名；`docker` 只允许 `run <镜像>`，容器命令不能再是 shell 或 `-e`/`-c`；`cargo` 只允许 `run`；`git` 拒绝 `-c` 和 `config`。
+- MCP 测试与保存改为参数数组，并且每个运行器只有允许的形状：脚本或包名，而不是“先放行再拦几个危险旗标”。因此 `uv run -- cmd`、`git --upload-pack=<cmd>`、`docker run … env -S "sh -c …"`、`python -m timeit <代码>` 会被拒绝；`python3.12` / `Python.EXE` 这类解释器名，以及 `uv run --python <路径>`，同样拒绝。合法的 `npx -p <包> <命令>` 仍然可以。`git` 只留只读子命令。
 - Linux 系统依赖安装与 `dpkg-query` 改为 `execFile` 参数数组，包名按 Debian 规则校验。
 - 依赖：升级可修复的 npm 漏洞（含 DOMPurify、fast-uri、tar、Electron、Vite、`@creativoma/liquid-glass`）。`npm audit --audit-level=high` 通过。`zip` 升到 9.x（解压时跳过符号链接，并去掉 setuid/setgid），`base64` 升到 0.23，同时更新 rustls / quinn-proto / async-trait。
 - `ccm` 预编译二进制移出 git，改由 Release 工作流构建并附带 SHA256。

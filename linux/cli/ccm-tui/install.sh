@@ -20,13 +20,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Best first: the binary you just built, then a release asset you downloaded
 # into dist/ (ccm-linux-x64, ccm-linux-arm64, or ccm-macos-arm64).
+# A browser download is not executable. chmod it before the -x test, or a
+# fresh install skips the file that is sitting right there.
 for CANDIDATE in \
     "$SCRIPT_DIR/target/release/ccm" \
     "$SCRIPT_DIR/dist/ccm-${P}-${A}"; do
-    if [ -x "$CANDIDATE" ]; then
-        echo -e "  ${G}使用本地二进制${N}: $CANDIDATE"
-        cp "$CANDIDATE" "$BIN"
-        break
+    if [ -f "$CANDIDATE" ]; then
+        chmod +x "$CANDIDATE"
+        if [ -x "$CANDIDATE" ]; then
+            echo -e "  ${G}使用本地二进制${N}: $CANDIDATE"
+            cp "$CANDIDATE" "$BIN"
+            break
+        fi
     fi
 done
 

@@ -104,7 +104,7 @@ AppImage 与 CLI 终端版（`ccm`）的用法见 [linux/README.md](linux/README
 
 两边的界面都不能直接起 shell。副作用走后端，命令用参数数组，不拼进一条字符串。
 
-- **MCP 启动** —— 只允许裸可执行文件名（`npx`、`node`、`python`、`docker`、`cargo` 等）。`node` / `python` / `bun` / `deno` / `npx` 拒绝 `-e`、`-c`、`eval`，并且必须带脚本或包名。`docker` 只允许 `docker run <镜像>`，镜像后面的命令也不能是 shell 或 `-e`/`-c`。`cargo` 只允许 `cargo run`。`git` 拒绝 `-c` 和 `config`。参数必须是字符串数组。
+- **MCP 启动** —— 只允许裸可执行文件名，参数必须是字符串数组。每个运行器只有一套允许的形状：`node` / `bun` / `deno` 跑脚本文件，`python -m` 拒绝 `timeit` / `runpy` 这类会把参数当代码执行的模块，`npx -p <包> <命令>` 可以，但命令不能是 shell。`uv run` 只跑脚本，不接受 `uv run -- cmd`，`--python` 也不能是路径。`docker run` 的容器命令不能是 shell、`env`、`busybox`、`xargs`，也不能是 `python3.12` 这类带版本号的解释器。`cargo` 只允许 `cargo run`。`git` 只允许只读子命令，并拒绝 `-c`、`config`、`--upload-pack`、`--exec`。
 - **路径** —— 配置读写限制在 Claude 的配置目录和明确列出的单文件里。
 - **下载** —— Node.js、Git、Claude Code 安装包校验 SHA256 后才安装。
 - **Linux 系统包** —— 包名符合 Debian 规则才交给 apt / dpkg。检测用 `execFile('dpkg-query', […, pkg])`，安装脚本把包名放进数组再 `"${packages[@]}"`，不把包名拼进 `apt-get install` 的字符串里执行。
