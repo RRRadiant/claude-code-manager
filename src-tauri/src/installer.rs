@@ -1066,12 +1066,25 @@ fn extract_with_zip_crate(zip_path: &str, destination: &str) -> Result<(), Strin
         // `enclosed_name` rejects entries that would escape the destination
         // (`..`, absolute paths) — zip-slip protection.
         let Some(rel) = entry.enclosed_name() else {
-            return Err(format!(
-                "archive entry escapes destination: {}",
-                entry.name()
-            ));
+            let label = entry
+                .name()
+                .map(|name| name.into_owned())
+                .unwrap_or_else(|_| "<unreadable>".to_string());
+            return Err(format!("archive entry escapes destination: {label}"));
         };
         let out_path = dest_root.join(rel);
+
+        // Never materialise symlinks. `enclosed_name` stops `..`, but a symlink
+        // entry whose target is absolute would still escape the destination if
+        // we created it and then wrote the next entry through it.
+        if entry.is_symlink() {
+            let label = entry
+                .name()
+                .map(|name| name.into_owned())
+                .unwrap_or_else(|_| "<unreadable>".to_string());
+            log::warn!("skipping symlink archive entry {label}");
+            continue;
+        }
 
         if entry.is_dir() {
             std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
@@ -1084,11 +1097,13 @@ fn extract_with_zip_crate(zip_path: &str, destination: &str) -> Result<(), Strin
         let mut out = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
         std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
 
-        // Preserve the executable bit where the archive records one.
+        // Keep the executable bit. Drop setuid/setgid/sticky: an archive must
+        // not be able to plant a privileged file.
         #[cfg(unix)]
         if let Some(mode) = entry.unix_mode() {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode));
+            let safe = mode & 0o0777;
+            let _ = std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(safe));
         }
     }
 
@@ -2630,6 +2645,53 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn zip_extract_rejects_traversal_and_skips_symlinks() {
+        let dir = temp_dir("zip");
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        let archive_path = dir.join("sample.zip");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        {
+            let file = std::fs::File::create(&archive_path).unwrap();
+            let mut archive = zip::ZipWriter::new(file);
+            archive.start_file("ok.txt", opts).unwrap();
+            std::io::Write::write_all(&mut archive, b"hello").unwrap();
+            archive.add_symlink("link", "/tmp/outside", opts).unwrap();
+            archive.finish().unwrap();
+        }
+
+        extract_with_zip_crate(archive_path.to_str().unwrap(), dest.to_str().unwrap()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("ok.txt")).unwrap(),
+            "hello"
+        );
+        assert!(
+            !dest.join("link").exists(),
+            "symlink entries must not be materialised"
+        );
+
+        let bad = dir.join("bad.zip");
+        let bad_dest = dir.join("bad-out");
+        std::fs::create_dir_all(&bad_dest).unwrap();
+        {
+            let file = std::fs::File::create(&bad).unwrap();
+            let mut archive = zip::ZipWriter::new(file);
+            archive.start_file("../escape.txt", opts).unwrap();
+            std::io::Write::write_all(&mut archive, b"nope").unwrap();
+            archive.finish().unwrap();
+        }
+        let err = extract_with_zip_crate(bad.to_str().unwrap(), bad_dest.to_str().unwrap())
+            .expect_err("a ../ entry must be rejected");
+        assert!(err.contains("escapes"), "{err}");
+        assert!(!dir.join("escape.txt").exists());
+        assert!(!bad_dest.join("escape.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── A1: PowerShell script transport ─────────────────────────
