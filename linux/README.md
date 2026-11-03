@@ -113,7 +113,7 @@ linux/
 npm install --legacy-peer-deps   # peer 依赖有冲突，必须带这个标志
 npm run dev                      # Electron 开发模式（HMR）
 npm run typecheck                # TypeScript 类型检查
-npm test                         # 单元测试（约 80 项）
+npm test                         # 单元测试（约 140 项，Linux 上全量运行）
 npm run build                    # 只构建，不打包
 npm run package:deb              # 打 .deb（x64 / arm64）
 npm run package:appimage         # 打 AppImage
