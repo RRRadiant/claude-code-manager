@@ -257,6 +257,37 @@ fn parse_mcp_entry(
     })
 }
 
+/// MCP `args` is a structured argv: a JSON array of strings, not one shell line.
+fn require_string_args(config: &serde_json::Value) -> AppResult<Vec<String>> {
+    let Some(value) = config.get("args") else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(items) = value.as_array() else {
+        return Err(crate::error::AppError::new(
+            crate::error::codes::SECURITY_INVALID_INPUT,
+            "参数格式无效",
+            "MCP 参数必须是字符串数组，不能是一整段命令行。",
+        ));
+    };
+    let mut args = Vec::with_capacity(items.len());
+    for item in items {
+        match item.as_str() {
+            Some(text) => args.push(text.to_string()),
+            None => {
+                return Err(crate::error::AppError::new(
+                    crate::error::codes::SECURITY_INVALID_INPUT,
+                    "参数格式无效",
+                    "MCP 参数数组的每一项都必须是字符串。",
+                ));
+            }
+        }
+    }
+    Ok(args)
+}
+
 /// Update an MCP server entry in its source file (atomic write with backup)
 pub fn update_server_config(
     source_file: &str,
@@ -270,6 +301,23 @@ pub fn update_server_config(
     let files = crate::security::mcp_allowed_files();
     let file_refs: Vec<&std::path::Path> = files.iter().map(std::path::PathBuf::as_path).collect();
     let path = crate::security::sanitize_path(source_file, &root_refs, &file_refs)?;
+    // Reject a non-array `args` value and interpreter eval flags before the
+    // config is written. HTTP servers omit `command` and skip the policy.
+    let invocation_args = require_string_args(config_json)?;
+    match config_json.get("command") {
+        Some(value) if value.is_null() => {}
+        Some(value) => {
+            let Some(command) = value.as_str() else {
+                return Err(crate::error::AppError::new(
+                    crate::error::codes::SECURITY_INVALID_INPUT,
+                    "命令格式无效",
+                    "MCP command 必须是字符串。",
+                ));
+            };
+            crate::security::validate_mcp_invocation(command, &invocation_args)?;
+        }
+        None => {}
+    }
     let content = if path.exists() {
         std::fs::read_to_string(&path)?
     } else {
@@ -362,9 +410,11 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
         }
     };
 
-    // SECURITY: validate command before spawning (defends against malicious
-    // config entries discovered by list_servers, which bypass the IPC layer).
-    if let Err(e) = crate::security::validate_mcp_command(command) {
+    // SECURITY: validate command and argv before spawning. Config files are
+    // outside the IPC layer, so a saved `node -e` / `python -c` must die here.
+    // Args stay a `Vec<String>` and are passed with `.args`, never joined.
+    let args = def.args.clone().unwrap_or_default();
+    if let Err(e) = crate::security::validate_mcp_invocation(command, &args) {
         return McpTestResult {
             success: false,
             protocol_version: None,
@@ -375,12 +425,12 @@ pub async fn test_stdio_server(def: &McpServerDef) -> McpTestResult {
             response_time_ms: start.elapsed().as_millis() as u64,
             stdout_summary: Some(format!("命令校验失败: {e}")),
             stderr_summary: None,
-            suggestions: vec!["命令包含非法字符或路径穿越，已拒绝执行。".to_string()],
+            suggestions: vec!["命令或参数未通过安全校验，已拒绝执行。".to_string()],
         };
     }
 
     let mut child = match tokio::process::Command::new(command)
-        .args(def.args.clone().unwrap_or_default())
+        .args(&args)
         .kill_on_drop(true)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

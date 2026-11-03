@@ -2,6 +2,10 @@
 use crate::error::{codes, AppError};
 use std::path::{Component, Path, PathBuf};
 
+mod invocation;
+
+pub use invocation::validate_mcp_invocation;
+
 /// Validate and normalize a file path, preventing path traversal.
 ///
 /// Resolution strategy (Windows-aware):
@@ -178,6 +182,19 @@ pub fn validate_shell_arg(input: &str) -> Result<&str, AppError> {
             codes::SECURITY_INVALID_INPUT,
             "输入过长",
             "参数长度超过限制（4096 字符）。",
+        ));
+    }
+
+    // Newlines are also in `dangerous` so the message names the character.
+    // Other controls (tab, NUL, DEL) never belong in an argv element.
+    if input
+        .chars()
+        .any(|ch| ch != '\n' && ch != '\r' && ch.is_control())
+    {
+        return Err(AppError::new(
+            codes::SECURITY_INVALID_INPUT,
+            "输入包含危险字符",
+            "参数包含不允许的控制字符。",
         ));
     }
 
