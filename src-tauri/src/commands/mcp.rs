@@ -43,10 +43,9 @@ pub async fn test_raw_mcp_stdio(
     // SECURITY: validate command + every arg before spawning anything.
     // This command accepts raw frontend input, so it is the highest-risk
     // path for command injection / arbitrary execution.
-    crate::security::validate_mcp_command(&command)?;
-    for arg in &args {
-        crate::security::validate_shell_arg(arg)?;
-    }
+    // One gate: allowlisted command, structured argv, interpreter policy.
+    // `validate_mcp_invocation` checks every element; do not join `args`.
+    crate::security::validate_mcp_invocation(&command, &args)?;
 
     let def = McpServerDef {
         name: "test".to_string(),

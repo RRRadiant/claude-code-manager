@@ -14,11 +14,15 @@
 
 import { test, describe, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { checkDependencies } from '../src/main/services/dependency-checker.ts'
+import { checkDependencies, dpkgQueryArgs } from '../src/main/services/dependency-checker.ts'
+import {
+  InvalidPackageNameError,
+  isDebianPackageName,
+} from '../src/main/services/dependency-installer.ts'
 import { managedBinDirs } from '../src/main/installer/components.ts'
 
 /** A directory holding an executable `npm`, to stand in for a real toolchain. */
@@ -82,6 +86,21 @@ describe('checkDependencies', () => {
         withoutPath.checks[names.indexOf(name)].installed,
         `${name} is an apt package and must not vary with PATH`,
       )
+    }
+  })
+
+  test('apt lookups use an argument array and a package-name allow pattern', () => {
+    assert.deepEqual(dpkgQueryArgs('libsecret-1-0'), ['-W', '-f=${Status}', 'libsecret-1-0'])
+    assert.equal(isDebianPackageName('zlib1g'), true)
+    assert.throws(() => dpkgQueryArgs('zlib1g;touch /tmp/x'), InvalidPackageNameError)
+    assert.throws(() => dpkgQueryArgs('$(id)'), InvalidPackageNameError)
+    assert.throws(() => dpkgQueryArgs('-y'), InvalidPackageNameError)
+  })
+
+  test('every package name the checker reports is safe to pass to apt', async () => {
+    const result = await checkDependencies({ path: '/nonexistent' })
+    for (const check of result.checks) {
+      assert.equal(isDebianPackageName(check.name), true, check.name)
     }
   })
 

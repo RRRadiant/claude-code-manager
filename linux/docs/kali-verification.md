@@ -5,7 +5,7 @@
 - **目标机**：Kali GNU/Linux 2026.1，kernel 6.18.12+kali-amd64，x86_64，用户 `kali`
 - **验证日期**：2026-09-14
 - **源码位置**：`~/ccm`
-- **驱动方式**：`tools/vm.py`（paramiko，SSH/SFTP）
+- **驱动方式**：当时用一台 Kali 虚拟机做 SSH/SFTP 回归。驱动脚本是内部工具，不随仓库分发。
 
 ---
 

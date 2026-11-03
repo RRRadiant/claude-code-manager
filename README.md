@@ -35,6 +35,18 @@
 > Linux 版在 **Kali GNU/Linux 2026.1（x86_64）** 上开发并完成端到端实测，
 > 完整验证记录见 [linux/docs/kali-verification.md](linux/docs/kali-verification.md)。
 
+## 版本号
+
+两条桌面线和终端 TUI **各自编号**，仓库没有一个统一的应用版本：
+
+| 组件 | 当前版本 | 记在哪 |
+|---|---|---|
+| Windows 桌面版（Tauri） | 2.0.0 | 根目录 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` |
+| Linux 桌面版（Electron） | 1.3.7 | `linux/package.json`。`.deb` / AppImage 的文件名跟随它 |
+| 终端 TUI `ccm` | crate 1.0.0 | `linux/cli/ccm-tui/Cargo.toml`。Release 资产叫 `ccm-linux-x64` 这类名字，不带版本号 |
+
+Git 标签 `v*` 会同时打出 Windows 安装包和 `ccm` 二进制。Linux 安装包仍以 `linux/package.json` 为准，两条桌面线合并之前不会强行改成同一个号。
+
 ## 快速开始
 
 ### Windows
@@ -87,6 +99,21 @@ AppImage 与 CLI 终端版（`ccm`）的用法见 [linux/README.md](linux/README
 - **MCP 管理** —— 增删改查 + 真实握手测试（stdio / HTTP）
 - **故障诊断** —— 一键扫描常见问题并给出修复建议
 - **日志脱敏** —— API Key、Token、密码写入日志前自动替换
+
+## 安全设计
+
+两边的界面都不能直接起 shell。副作用走后端，命令用参数数组，不拼进一条字符串。
+
+- **MCP 启动** —— 只允许裸可执行文件名，参数必须是字符串数组。每个运行器只有一套允许的形状：`node` / `bun` / `deno` 跑脚本文件，`python -m` 拒绝 `timeit` / `runpy` 这类会把参数当代码执行的模块，`npx -p <包> <命令>` 可以，但命令不能是 shell。`uv run` 只跑脚本，不接受 `uv run -- cmd`，`--python` 也不能是路径。`docker run` 的容器命令不能是 shell、`env`、`busybox`、`xargs`，也不能是 `python3.12` 这类带版本号的解释器。`cargo` 只允许 `cargo run`。`git` 只允许只读子命令，并拒绝 `-c`、`config`、`--upload-pack`、`--exec`。
+- **路径** —— 配置读写限制在 Claude 的配置目录和明确列出的单文件里。
+- **下载** —— Node.js、Git、Claude Code 安装包校验 SHA256 后才安装。
+- **Linux 系统包** —— 包名符合 Debian 规则才交给 apt / dpkg。检测用 `execFile('dpkg-query', […, pkg])`，安装脚本把包名放进数组再 `"${packages[@]}"`，不把包名拼进 `apt-get install` 的字符串里执行。
+- **凭据** —— Windows 另存一份到 Credential Manager。Claude Code 本身只认 `settings.json` 里的字面 token，所以那份文件仍是明文；见下方说明。Linux 的面板密钥走 `safeStorage`（libsecret）。
+- **日志** —— API Key、Token、密码、邮箱写入日志前替换掉。
+- **发布物** —— `ccm` 二进制不进 git。打 tag 时由 GitHub Actions 构建，Release 里带 SHA256。
+- **依赖** —— CI 对 Windows 工程跑 `npm audit` 和 `cargo audit`，对 Linux 工程跑生产依赖的 `npm audit`。
+
+细节和威胁模型见 [docs/security.md](docs/security.md)。
 
 ## 系统要求
 
@@ -150,7 +177,7 @@ AppImage 与 CLI 终端版（`ccm`）的用法见 [linux/README.md](linux/README
 - **命令隔离** —— 前端不能直接执行系统命令，所有副作用经 Rust 后端处理
 - **无命令拼接** —— 所有子进程调用使用参数数组；需要执行 PowerShell 脚本时通过
   `-EncodedCommand` 传输，不使用字符串拼接
-- **MCP 命令白名单** —— MCP 测试命令在 spawn 前经白名单校验，拒绝路径穿越与 shell 元字符
+- **MCP 命令策略** —— 白名单之外，解释器还要过参数策略（拒绝 `-e` / `-c` / `eval`，要求脚本或包名）。详见上文 [安全设计](#安全设计)
 - **路径校验** —— 配置读写限定在允许的目录内，防止路径穿越
 - **原子写入** —— 配置文件写入前备份、写临时文件校验后重命名，失败自动回滚
 - **日志脱敏** —— API Key、Token、密码、邮箱写入日志前自动替换
@@ -219,8 +246,10 @@ npx tauri build --target x86_64-pc-windows-msvc   # x64 打包（MSI + NSIS）
 npm run typecheck              # TypeScript 类型检查
 npm run lint                   # oxlint
 npm run build                  # 前端生产构建
-cd src-tauri && cargo test     # Rust 测试
+npm audit --audit-level=high   # 含开发依赖；生产依赖应无 critical / high
+cd src-tauri && cargo test     # Rust 测试（Windows 目标）
 cd src-tauri && cargo clippy -- -D warnings
+cd src-tauri && cargo audit    # 需要能解析当前 RustSec 库的 cargo-audit
 ```
 
 > `Cargo.toml` 中配置了 `[profile]`（dev/test 关闭调试符号、release 加 `strip`）。
@@ -233,11 +262,13 @@ cd src-tauri && cargo clippy -- -D warnings
 ```bash
 cd linux
 npm install --legacy-peer-deps   # peer 依赖有冲突，必须带这个标志
+npm run typecheck
 npm test                         # 单元测试
+npm audit --audit-level=high     # 无 critical / high
 npm run package:deb              # 打 .deb（x64 / arm64）
 npm run package:appimage         # 打 AppImage
 
-cd cli/ccm-tui && cargo build --release   # 编译 ccm
+cd cli/ccm-tui && cargo test && cargo build --release   # 编译 ccm
 ```
 
 > 国内网络下 electron-builder 从 GitHub 拉取 Electron 会被限速，可改用镜像：
@@ -283,7 +314,7 @@ claude-code-manager/
 │   ├── docs/                 #   Kali 验证报告、分发说明、UI 约定
 │   └── package.json          #   Electron / electron-builder 配置
 ├── docs/                     # Windows 版：架构、安全、参考文档与 ADR
-├── .github/workflows/        # Windows CI / Release，Linux CI（linux.yml）
+├── .github/workflows/        # Windows CI / Release（含 ccm 与 SHA256），Linux CI
 └── CHANGELOG.md
 ```
 

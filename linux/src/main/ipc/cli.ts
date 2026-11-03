@@ -82,7 +82,19 @@ export function registerCliIpcHandlers(): void {
       return { success: true, mode: 'nothing-to-do', command: null, terminal: null }
     }
 
-    const plan = buildDependencyInstallPlan(missing)
+    let plan
+    try {
+      plan = buildDependencyInstallPlan(missing)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return {
+        success: false,
+        mode: 'manual',
+        command: null,
+        terminal: null,
+        error: message,
+      }
+    }
     const script = writeTempScript('install-deps', renderInstallScript(plan))
     const launch = await launchScriptInTerminal(script)
 

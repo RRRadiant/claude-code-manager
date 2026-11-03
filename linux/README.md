@@ -58,6 +58,10 @@ bash install.sh        # 安装到 ~/.local/bin/ccm
 ccm
 ```
 
+`install.sh` 使用 `target/release/ccm`。仓库不提交预编译二进制；也可以从
+[Releases](https://github.com/RRRadiant/claude-code-manager/releases) 下载 `ccm-linux-x64`
+（或 arm64 / macOS arm64），用 `ccm-SHA256SUMS.txt` 核对后放到 `cli/ccm-tui/dist/` 再运行脚本。
+
 按键：`1`–`8` 跳转标签页，`Tab` 切换，`↑↓`/`j k` 移动，`Enter` 确认，`n` 新建，`d` 删除，`q` 退出。
 
 ## 界面
@@ -96,12 +100,11 @@ linux/
 ├── cli/
 │   ├── ccm                   # CLI 入口脚本
 │   └── ccm-tui/              # Rust TUI 源码（ratatui + crossterm）
-│       ├── src/              # 事件循环 / 配置读写 / 8 个标签页
-│       └── dist/             # 预编译二进制（x64 / arm64 / macOS arm64）
+│       └── src/              # 事件循环 / 配置读写 / 8 个标签页
 ├── resources/linux/          # 图标、桌面入口、打包脚本（postinst / postrm / AppRun）
 ├── scripts/                  # 构建、交付与验证脚本
 ├── tests/                    # 单元测试
-├── tools/                    # Kali 测试 VM 辅助脚本
+├── tools/                    # 一次性源码修补脚本（不参与构建）
 ├── docs/                     # Kali 验证报告、分发说明、UI 约定
 ├── package.json              # Electron / electron-builder 配置
 └── electron.vite.config.ts
@@ -113,7 +116,8 @@ linux/
 npm install --legacy-peer-deps   # peer 依赖有冲突，必须带这个标志
 npm run dev                      # Electron 开发模式（HMR）
 npm run typecheck                # TypeScript 类型检查
-npm test                         # 单元测试（约 140 项，Linux 上全量运行）
+npm test                         # 单元测试
+npm audit --audit-level=high   # 无 critical / high；electron-builder 仍有 moderate
 npm run build                    # 只构建，不打包
 npm run package:deb              # 打 .deb（x64 / arm64）
 npm run package:appimage         # 打 AppImage
@@ -145,7 +149,6 @@ cargo test                       # Rust 单元测试
 | [docs/kali-verification.md](docs/kali-verification.md) | Kali 实机验证报告（安装管线、GUI、CLI、回归记录） |
 | [docs/distribution.md](docs/distribution.md) | 分发说明：deb / AppImage / CLI 的选择与常见启动问题 |
 | [docs/panel-ui-conventions.md](docs/panel-ui-conventions.md) | 面板 UI 约定 |
-| [HANDOFF.md](HANDOFF.md) | 开发交接文档（架构、构建、发布流程） |
 | [resources/linux/安装说明.txt](resources/linux/安装说明.txt) | 发给最终用户的安装说明 |
 
 ## 已知问题
@@ -154,9 +157,8 @@ cargo test                       # Rust 单元测试
    Debian 系优先用 `.deb`。
 2. **Chromium 沙箱**：AppImage 内的 `chrome-sandbox` 无法带 setuid 位，新系统默认限制未特权
    用户命名空间时启动即退出，从桌面入口双击看不到任何报错。用启动脚本或 `.deb` 可规避。
-3. **arm64 未在真实 Kali 上实测**：本地可交叉编译，但发布前应以 x64 为准。
-4. `cli/ccm-tui/dist/` 里的预编译二进制构建于若干修复之前，**发布时建议从源码重新构建**。
-5. CLI 不提供 Hooks / Plugins / MCP 管理，这些仅 GUI 支持。
+3. **arm64 未在真实 Kali 上实测**：Release 工作流会交叉编译 `ccm-linux-arm64`，发布前仍应以 x64 为准。
+4. CLI 不提供 Hooks / Plugins / MCP 管理，这些仅 GUI 支持。
 
 ## 许可证
 

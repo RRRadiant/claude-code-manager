@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@creativoma/liquid-glass": "^1.2.0",
+    "@creativoma/liquid-glass": "^1.5.0",
     "@tauri-apps/api": "^2.11.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -26,13 +26,16 @@
     "@tailwindcss/postcss": "^4.3.3",
     "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^26.5.1",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.82.0",
     "postcss": "^8.5.20",
     "tailwindcss": "^4.3.3",
     "typescript": "~7.0.2",
-    "vite": "^8.1.1"
+    "vite": "^8.3.5"
+  },
+  "overrides": {
+    "source-map-js": "1.2.2"
   }
 }
