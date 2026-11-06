@@ -48,7 +48,7 @@ uuid = { version = "1", features = ["v4"] }
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 winreg = "0.55"
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Environment"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Environment"] }
 
 # HTTP client (for API testing, model detection)
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
